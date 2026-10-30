@@ -2,14 +2,16 @@ import { randomUUID } from 'node:crypto';
 import { WebSocket, WebSocketServer } from 'ws';
 
 type PlayerState = { id: string; name: string; x: number; z: number; yaw: number; hp: number; shielding: boolean };
-type Room = { code: string; players: Map<string, Connection> };
+type WorldLocation = 'taganga' | 'centro' | 'rodadero' | 'gaira' | 'libano' | 'mamatoco' | 'bonda' | 'brumalia';
+type Room = { code: string; location: WorldLocation; players: Map<string, Connection> };
 type ClientMessage =
   | { type: 'create-room'; name: string }
   | { type: 'join-room'; name: string; code: string }
   | { type: 'player-state'; state: Omit<PlayerState, 'id' | 'name'> }
+  | { type: 'travel-to-location'; location: WorldLocation }
   | { type: 'leave-room' };
 type ServerMessage =
-  | { type: 'room-joined'; playerId: string; code: string; players: PlayerState[] }
+  | { type: 'room-joined'; playerId: string; code: string; location: WorldLocation; players: PlayerState[] }
   | { type: 'player-joined'; player: PlayerState }
   | { type: 'player-updated'; player: PlayerState }
   | { type: 'player-left'; playerId: string }
@@ -19,7 +21,12 @@ type Connection = { socket: WebSocket; state: PlayerState; roomCode: string };
 
 const port = Number(process.env.PORT ?? 8080);
 const maxPlayers = 16;
-const worldBounds = 40;
+const worldBounds = 90;
+const worldSpawnCells: Record<WorldLocation, { x: number; y: number }> = {
+  taganga: { x: 10, y: 7 }, centro: { x: 21, y: 21 }, rodadero: { x: 28, y: 38 },
+  gaira: { x: 37, y: 46 }, libano: { x: 38, y: 23 }, mamatoco: { x: 48, y: 17 },
+  bonda: { x: 50, y: 36 }, brumalia: { x: 54, y: 7 },
+};
 const rooms = new Map<string, Room>();
 const sessions = new Map<WebSocket, string>();
 const server = new WebSocketServer({ port, host: '0.0.0.0' });
@@ -33,6 +40,10 @@ function broadcast(room: Room, message: ServerMessage, except?: WebSocket): void
 function sanitizeName(value: unknown): string {
   if (typeof value !== 'string') return 'Arquera';
   return value.replace(/[<>\u0000-\u001f]/g, '').trim().slice(0, 20) || 'Arquera';
+}
+function isWorldLocation(value: unknown): value is WorldLocation {
+  return value === 'taganga' || value === 'centro' || value === 'rodadero' || value === 'gaira'
+    || value === 'libano' || value === 'mamatoco' || value === 'bonda' || value === 'brumalia';
 }
 function makeCode(): string {
   const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
@@ -68,14 +79,19 @@ function createPlayer(socket: WebSocket, name: unknown, room: Room): void {
   }
   const playerId = randomUUID();
   const slot = room.players.size;
+  const spawn = worldSpawnCells[room.location];
   const player: PlayerState = {
     id: playerId, name: sanitizeName(name),
-    x: -9.9 + (slot % 4) * 0.85, z: -9.9 + Math.floor(slot / 4) * 0.85,
+    x: (spawn.x - 31.5) * 2.2 + (slot % 4) * 0.9,
+    z: (spawn.y - 27.5) * 2.2 + Math.floor(slot / 4) * 0.9,
     yaw: 0, hp: 100, shielding: false,
   };
   room.players.set(playerId, { socket, state: player, roomCode: room.code });
   sessions.set(socket, playerId);
-  send(socket, { type: 'room-joined', playerId, code: room.code, players: Array.from(room.players.values(), (entry) => entry.state) });
+  send(socket, {
+    type: 'room-joined', playerId, code: room.code, location: room.location,
+    players: Array.from(room.players.values(), (entry) => entry.state),
+  });
   broadcast(room, { type: 'player-joined', player }, socket);
 }
 
@@ -87,7 +103,7 @@ server.on('connection', (socket) => {
       removePlayer(socket);
       let room: Room | undefined;
       if (message.type === 'create-room') {
-        room = { code: makeCode(), players: new Map() };
+        room = { code: makeCode(), location: 'brumalia', players: new Map() };
         rooms.set(room.code, room);
       } else {
         const code = typeof message.code === 'string' ? message.code.trim().toUpperCase() : '';
@@ -103,6 +119,14 @@ server.on('connection', (socket) => {
     if (message.type === 'leave-room') {
       removePlayer(socket);
       send(socket, { type: 'room-left' });
+      return;
+    }
+    if (message.type === 'travel-to-location') {
+      if (!isWorldLocation(message.location)) {
+        send(socket, { type: 'room-error', message: 'Ese barrio no existe.' });
+        return;
+      }
+      room.location = message.location;
       return;
     }
     if (message.type === 'player-state') {

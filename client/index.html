@@ -80,6 +80,21 @@
         transform: translateX(-50%);
         pointer-events: none;
       }
+      #world-waypoint {
+        position: absolute;
+        z-index: 3;
+        top: 132px;
+        left: 50%;
+        padding: 8px 14px;
+        border: 1px solid rgba(227, 213, 171, 0.3);
+        background: rgba(26, 42, 33, 0.88);
+        color: #f0d99c;
+        font-size: 13px;
+        font-weight: 700;
+        transform: translateX(-50%);
+        pointer-events: none;
+      }
+      #world-waypoint[hidden] { display: none; }
 
       .reticle {
         position: absolute;
@@ -152,8 +167,8 @@
       .world-map-panel {
         display: grid;
         grid-template-rows: auto minmax(0, 1fr);
-        width: min(1120px, 100%);
-        max-height: min(720px, calc(100dvh - 48px));
+        width: min(1480px, 100%);
+        max-height: min(920px, calc(100dvh - 40px));
         border: 1px solid rgba(220, 202, 151, 0.38);
         background: #14201d;
         box-shadow: 0 28px 80px rgba(0, 0, 0, 0.55);
@@ -179,12 +194,12 @@
       }
       .map-content {
         display: grid;
-        grid-template-columns: minmax(0, 1fr) 250px;
+        grid-template-columns: minmax(0, 1fr) 280px;
         min-height: 0;
       }
       .map-art {
         position: relative;
-        min-height: 440px;
+        min-height: 640px;
         overflow: hidden;
         background: linear-gradient(140deg, #718856, #3f6246 52%, #354e3d);
         isolation: isolate;
@@ -207,15 +222,23 @@
         clip-path: polygon(20% 0, 100% 0, 100% 100%, 0 100%, 16% 78%, 8% 59%, 25% 43%, 13% 22%);
         z-index: -1;
       }
-      .map-road {
+      .map-routes {
         position: absolute;
-        height: 3px;
-        border-top: 2px dashed rgba(226, 205, 143, 0.62);
-        transform-origin: left center;
+        inset: 0;
+        width: 100%;
+        height: 100%;
+        overflow: visible;
         pointer-events: none;
       }
-      .map-road.road-one { left: 28%; top: 22%; width: 56%; transform: rotate(20deg); }
-      .map-road.road-two { left: 34%; top: 75%; width: 50%; transform: rotate(-35deg); }
+      .map-routes path {
+        fill: none;
+        stroke: rgba(241, 216, 151, 0.82);
+        stroke-width: 0.55;
+        stroke-linecap: round;
+        stroke-dasharray: 1.6 1.25;
+        filter: drop-shadow(0 1px 1px rgba(18, 32, 24, 0.85));
+      }
+      .map-routes path.route-main { stroke-width: 0.8; stroke-dasharray: none; opacity: 0.78; }
       .map-location {
         position: absolute;
         display: flex;
@@ -241,6 +264,8 @@
       }
       .map-location:hover, .map-location[aria-pressed="true"] { border-color: rgba(240, 217, 156, 0.7); background: rgba(21, 38, 29, 0.92); }
       .map-location.current::before { background: #e3b75b; box-shadow: 0 0 12px #f6d881; }
+      .map-location.destination { border-color: rgba(119, 220, 190, 0.82); background: rgba(21, 52, 42, 0.94); }
+      .map-location.destination::before { background: #65d2ac; box-shadow: 0 0 12px #65d2ac; }
       .map-compass {
         position: absolute;
         top: 14px;
@@ -365,6 +390,7 @@
         .stat-pill, .turn-pill { min-width: auto; padding: 7px 8px; font-size: 10px; }
         #room-button { min-height: 30px; padding: 0 7px; font-size: 9px; }
         #turn-message { top: 73px; font-size: 11px; }
+        #world-waypoint { top: 112px; font-size: 11px; }
         .bottom-panel { flex-wrap: wrap; gap: 7px; padding: 9px 8px 12px; }
         .skills { gap: 5px; }
         .skill-button { min-width: 90px; min-height: 46px; padding: 6px; }
@@ -374,14 +400,20 @@
         .controls-note { display: none; }
         #world-map { padding: 10px; }
         .world-map-panel { max-height: calc(100dvh - 20px); }
-        .map-content { grid-template-columns: minmax(0, 1fr) 145px; }
-        .map-art { min-height: 370px; }
+        .map-content { grid-template-columns: minmax(0, 1fr) 155px; }
+        .map-art { min-height: min(620px, calc(100dvh - 190px)); }
         .map-location { gap: 4px; padding: 4px; font-size: 9px; }
         .map-location::before { width: 6px; height: 6px; }
         .map-details { padding: 12px 10px; }
         .map-details h2 { font-size: 15px; }
         .map-details p { font-size: 11px; }
         .map-region-list { gap: 4px; margin-top: 12px; }
+      }
+      @media (max-width: 480px) {
+        .map-content { grid-template-columns: 1fr; grid-template-rows: minmax(300px, 1fr) auto; overflow-y: auto; }
+        .map-art { min-height: 48dvh; }
+        .map-details { border-left: 0; border-top: 1px solid rgba(220, 202, 151, 0.2); }
+        .map-region-list { grid-template-columns: 1fr 1fr; }
       }
     </style>
   </head>
@@ -390,7 +422,7 @@
       <div id="world" aria-label="Vista en primera persona del bosque de Brumalia"></div>
       <header class="topbar">
         <div class="brand">
-          <small>EL BOSQUE DE</small>
+          <small id="location-label">EL BOSQUE DE</small>
           <strong>KRIKAS</strong>
         </div>
         <div class="player-panel">
@@ -403,6 +435,7 @@
         </div>
       </header>
       <div id="turn-message">WASD: moverse · Shift + W: correr · Espacio: saltar · Q: escudo · M: mapa</div>
+      <div id="world-waypoint" hidden aria-live="polite"></div>
       <div class="reticle" aria-hidden="true"></div>
       <section id="hover-card" class="hover-card" hidden aria-live="polite">
         <h2 id="hover-name"></h2>
@@ -426,8 +459,10 @@
             <div class="map-art" aria-label="Mapa ilustrado de las regiones de Santa Marta">
               <div class="map-sea"></div>
               <div class="map-ridge"></div>
-              <div class="map-road road-one"></div>
-              <div class="map-road road-two"></div>
+              <svg class="map-routes" viewBox="0 0 100 100" preserveAspectRatio="none" aria-hidden="true">
+                <path class="route-main" d="M 19 17 L 34 42 L 43 70 L 57 83 L 77 66 L 74 31 L 82 16" />
+                <path d="M 34 42 L 58 45 L 74 31" />
+              </svg>
               <span class="map-compass">N ↑</span>
               <button class="map-location" data-world-location="taganga" style="left: 19%; top: 17%" type="button" aria-pressed="false">Taganga</button>
               <button class="map-location" data-world-location="centro" style="left: 34%; top: 42%" type="button" aria-pressed="false">Centro Histórico</button>
@@ -442,6 +477,7 @@
               <small>SECTOR SELECCIONADO</small>
               <h2 id="map-location-title">Bosque Brumalia</h2>
               <p id="map-location-description">Un bosque antiguo en las faldas de la Sierra, donde patrullan los arqueros enmascarados.</p>
+              <p class="map-travel-hint">Marca un barrio como destino y recorre los caminos caminando. Usa WASD para avanzar.</p>
               <div class="map-region-list">
                 <span>Taganga · costa norte</span>
                 <span>Centro Histórico · bahía</span>
@@ -500,7 +536,7 @@
         <div class="defeat-panel">
           <small>EL BOSQUE DE BRUMALIA</small>
           <h1 id="defeat-title">Has caído</h1>
-          <p>Los arqueros enmascarados te han vencido.</p>
+          <p>Los chirretes del pando te apuñalaron</p>
           <button id="restart-game" type="button">VOLVER A ENTRAR</button>
         </div>
       </section>

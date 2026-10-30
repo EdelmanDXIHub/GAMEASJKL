@@ -3,8 +3,8 @@ import { Grid } from '../../../shared/src/grid/Grid';
 import { aStar, hasLineOfSight, manhattanDistance } from '../../../shared/src/pathfinding/astar';
 import type { Cell } from '../../../shared/src/types/network';
 
-const GRID_WIDTH = 12;
-const GRID_HEIGHT = 12;
+const GRID_WIDTH = 64;
+const GRID_HEIGHT = 56;
 const CELL_SIZE = 2.2;
 const PLAYER_HEIGHT = 1.65;
 const PLAYER_SPEED = 4.8;
@@ -14,15 +14,55 @@ const GRAVITY = 18;
 const ENEMY_STEP_DURATION = 0.54;
 const COVER_STEP_DURATION = 0.42;
 const ARROW_RANGE = 100;
-const OBSTACLES: Array<[number, number]> = [
-  [3, 2], [4, 2], [5, 2], [3, 3], [5, 3],
-  [7, 4], [8, 4], [7, 5], [8, 5], [2, 7],
-  [3, 7], [9, 8], [10, 8], [10, 9],
-];
-
 type SkillId = 'earth' | 'wind' | 'water';
 type Phase = 'combat' | 'victory' | 'defeat';
 type WorldLocationId = 'taganga' | 'centro' | 'rodadero' | 'gaira' | 'libano' | 'mamatoco' | 'bonda' | 'brumalia';
+const WORLD_CENTERS: Record<WorldLocationId, Cell> = {
+  taganga: { x: 10, y: 7 }, centro: { x: 21, y: 21 }, rodadero: { x: 28, y: 38 },
+  gaira: { x: 37, y: 46 }, libano: { x: 38, y: 23 }, mamatoco: { x: 48, y: 17 },
+  bonda: { x: 50, y: 36 }, brumalia: { x: 54, y: 7 },
+};
+const WORLD_ROUTES: Array<[WorldLocationId, WorldLocationId]> = [
+  ['taganga', 'centro'], ['centro', 'rodadero'], ['rodadero', 'gaira'],
+  ['gaira', 'bonda'], ['bonda', 'mamatoco'], ['mamatoco', 'brumalia'],
+  ['centro', 'libano'], ['libano', 'mamatoco'],
+];
+
+function distanceToWorldRoute(x: number, y: number): number {
+  return Math.min(...WORLD_ROUTES.map(([from, to]) => {
+    const a = WORLD_CENTERS[from]; const b = WORLD_CENTERS[to];
+    const dx = b.x - a.x; const dy = b.y - a.y;
+    const t = Math.max(0, Math.min(1, ((x - a.x) * dx + (y - a.y) * dy) / (dx * dx + dy * dy)));
+    return Math.hypot(x - (a.x + t * dx), y - (a.y + t * dy));
+  }));
+}
+
+function buildWorldObstacles(): Array<[number, number]> {
+  const obstacles: Array<[number, number]> = [];
+  const enemyOffsets: Cell[] = [{ x: 7, y: 1 }, { x: 8, y: 1 }, { x: 8, y: 2 }, { x: 4, y: 8 }];
+  for (let x = 0; x < GRID_WIDTH; x++) obstacles.push([x, 0], [x, GRID_HEIGHT - 1]);
+  for (let y = 1; y < GRID_HEIGHT - 1; y++) obstacles.push([0, y], [GRID_WIDTH - 1, y]);
+  for (let y = 1; y < GRID_HEIGHT - 1; y++) {
+    for (let x = 1; x < GRID_WIDTH - 1; x++) {
+      const nearNeighborhood = Object.values(WORLD_CENTERS).some((center) => Math.hypot(x - center.x, y - center.y) < 5);
+      const nearEnemySpawn = Object.values(WORLD_CENTERS).some((center) => enemyOffsets.some((offset) =>
+        Math.hypot(x - center.x - offset.x, y - center.y - offset.y) < 2,
+      ));
+      if (!nearNeighborhood && !nearEnemySpawn && distanceToWorldRoute(x, y) > 2.6 && (x * 37 + y * 71) % 173 < 2) obstacles.push([x, y]);
+    }
+  }
+  return obstacles;
+}
+
+const OBSTACLES = buildWorldObstacles();
+type EnemyModel = 'archer' | 'crab';
+type EnemyDefinition = { id: string; name: string; cell: Cell; hp: number; color: number; model: EnemyModel };
+type WorldEncounter = {
+  background: number;
+  ground: number;
+  tiles: [number, number];
+  enemies: EnemyDefinition[];
+};
 
 const WORLD_LOCATION_DESCRIPTIONS: Record<WorldLocationId, string> = {
   taganga: 'Bahia pesquera al norte de Santa Marta, entre acantilados y aguas profundas.',
@@ -32,7 +72,83 @@ const WORLD_LOCATION_DESCRIPTIONS: Record<WorldLocationId, string> = {
   libano: 'Barrio de ladera con callejones, escalinatas y miradores sobre la ciudad.',
   mamatoco: 'Cruce oriental de caminos hacia los barrios altos y las estribaciones.',
   bonda: 'Poblado ribereno en la ruta que sube desde la ciudad hacia la Sierra Nevada.',
-  brumalia: 'Bosque antiguo en las faldas de la Sierra, territorio de los arqueros enmascarados.',
+  brumalia: 'Bosque antiguo en las faldas de la Sierra, territorio de los chirretes del pando.',
+};
+const COASTAL_LOCATIONS = new Set<WorldLocationId>(['taganga', 'rodadero', 'gaira']);
+
+const WORLD_ENCOUNTERS: Record<WorldLocationId, WorldEncounter> = {
+  taganga: {
+    background: 0x9db8bd, ground: 0x567a7c, tiles: [0x688b82, 0x5a7b73],
+    enemies: [
+      { id: 'taganga-rock-crab', name: 'Cangrejo de roca', cell: { x: 8, y: 2 }, hp: 72, color: 0xc7694a, model: 'crab' },
+      { id: 'taganga-hermit-crab', name: 'Cangrejo ermitaño', cell: { x: 9, y: 2 }, hp: 82, color: 0xd99554, model: 'crab' },
+      { id: 'taganga-reef-crab', name: 'Cangrejo del arrecife', cell: { x: 9, y: 3 }, hp: 78, color: 0x9a5141, model: 'crab' },
+      { id: 'taganga-shore-crab', name: 'Cangrejo de la orilla', cell: { x: 5, y: 9 }, hp: 90, color: 0xc77b43, model: 'crab' },
+    ],
+  },
+  centro: {
+    background: 0xbab6a8, ground: 0x777263, tiles: [0x928a75, 0x807965],
+    enemies: [
+      { id: 'centro-market-raider', name: 'Saqueador del mercado', cell: { x: 8, y: 2 }, hp: 72, color: 0x8c4f43, model: 'archer' },
+      { id: 'centro-harbor-watch', name: 'Vigía del puerto', cell: { x: 9, y: 2 }, hp: 82, color: 0x536e7e, model: 'archer' },
+      { id: 'centro-bay-raider', name: 'Bandido de la bahía', cell: { x: 9, y: 3 }, hp: 78, color: 0x765341, model: 'archer' },
+      { id: 'centro-square-scout', name: 'Explorador de la plaza', cell: { x: 5, y: 9 }, hp: 90, color: 0x607a4c, model: 'archer' },
+    ],
+  },
+  rodadero: {
+    background: 0xc8c6b2, ground: 0xb69c70, tiles: [0xd1b982, 0xc5ad79],
+    enemies: [
+      { id: 'rodadero-red-crab', name: 'Cangrejo rojo', cell: { x: 8, y: 2 }, hp: 78, color: 0xd85d46, model: 'crab' },
+      { id: 'rodadero-sand-crab', name: 'Cangrejo de arena', cell: { x: 9, y: 2 }, hp: 86, color: 0xd99b55, model: 'crab' },
+      { id: 'rodadero-giant-crab', name: 'Cangrejo gigante', cell: { x: 9, y: 3 }, hp: 112, color: 0xa94338, model: 'crab' },
+      { id: 'rodadero-rock-crab', name: 'Cangrejo de muelle', cell: { x: 5, y: 9 }, hp: 94, color: 0xba6748, model: 'crab' },
+    ],
+  },
+  gaira: {
+    background: 0xb4b79c, ground: 0x8c8a62, tiles: [0xa3a071, 0x928f65],
+    enemies: [
+      { id: 'gaira-river-crab', name: 'Cangrejo del estuario', cell: { x: 8, y: 2 }, hp: 76, color: 0xb95d43, model: 'crab' },
+      { id: 'gaira-rail-guard', name: 'Guardia ferroviario', cell: { x: 9, y: 2 }, hp: 86, color: 0x536e7e, model: 'archer' },
+      { id: 'gaira-track-raider', name: 'Saqueador de la vía', cell: { x: 9, y: 3 }, hp: 82, color: 0x8c4f43, model: 'archer' },
+      { id: 'gaira-river-rock-crab', name: 'Cangrejo de río', cell: { x: 5, y: 9 }, hp: 90, color: 0xd18a4c, model: 'crab' },
+    ],
+  },
+  libano: {
+    background: 0xa9a596, ground: 0x686451, tiles: [0x817b65, 0x726c59],
+    enemies: [
+      { id: 'libano-alley-scout', name: 'Vigía del callejón', cell: { x: 8, y: 2 }, hp: 78, color: 0x607a4c, model: 'archer' },
+      { id: 'libano-hill-raider', name: 'Bandido de la ladera', cell: { x: 9, y: 2 }, hp: 88, color: 0x8c4f43, model: 'archer' },
+      { id: 'libano-stair-guard', name: 'Guardián de las escaleras', cell: { x: 9, y: 3 }, hp: 82, color: 0x536e7e, model: 'archer' },
+      { id: 'libano-lookout', name: 'Explorador del mirador', cell: { x: 5, y: 9 }, hp: 92, color: 0x80633f, model: 'archer' },
+    ],
+  },
+  mamatoco: {
+    background: 0xb3b99d, ground: 0x6c7650, tiles: [0x89916a, 0x778158],
+    enemies: [
+      { id: 'mamatoco-crossing-scout', name: 'Explorador del cruce', cell: { x: 8, y: 2 }, hp: 74, color: 0x607a4c, model: 'archer' },
+      { id: 'mamatoco-stone-guard', name: 'Guardián de piedra', cell: { x: 9, y: 2 }, hp: 90, color: 0x72766b, model: 'archer' },
+      { id: 'mamatoco-road-raider', name: 'Saqueador del camino', cell: { x: 9, y: 3 }, hp: 82, color: 0x8c4f43, model: 'archer' },
+      { id: 'mamatoco-sierra-scout', name: 'Vigía de la Sierra', cell: { x: 5, y: 9 }, hp: 94, color: 0x536e7e, model: 'archer' },
+    ],
+  },
+  bonda: {
+    background: 0xa7b59a, ground: 0x5b7050, tiles: [0x78906a, 0x68805d],
+    enemies: [
+      { id: 'bonda-river-crab', name: 'Cangrejo del río Bonda', cell: { x: 8, y: 2 }, hp: 78, color: 0xc46e45, model: 'crab' },
+      { id: 'bonda-river-guard', name: 'Guardián ribereño', cell: { x: 9, y: 2 }, hp: 88, color: 0x536e7e, model: 'archer' },
+      { id: 'bonda-bank-crab', name: 'Cangrejo de la orilla', cell: { x: 9, y: 3 }, hp: 82, color: 0xd29350, model: 'crab' },
+      { id: 'bonda-trail-raider', name: 'Saqueador del camino', cell: { x: 5, y: 9 }, hp: 92, color: 0x8c4f43, model: 'archer' },
+    ],
+  },
+  brumalia: {
+    background: 0x9cad94, ground: 0x304f3e, tiles: [0x466d50, 0x3d6249],
+    enemies: [
+      { id: 'mossling', name: 'Musguito', cell: { x: 8, y: 2 }, hp: 72, color: 0x607a4c, model: 'archer' },
+      { id: 'thornling', name: 'Espinajo', cell: { x: 9, y: 2 }, hp: 82, color: 0x8c4f43, model: 'archer' },
+      { id: 'mireling', name: 'Lodoso', cell: { x: 9, y: 3 }, hp: 78, color: 0x536e7e, model: 'archer' },
+      { id: 'wildling', name: 'Silvestre', cell: { x: 5, y: 9 }, hp: 90, color: 0x80633f, model: 'archer' },
+    ],
+  },
 };
 
 type EnemyState = {
@@ -42,6 +158,7 @@ type EnemyState = {
   hp: number;
   maxHp: number;
   color: number;
+  model: EnemyModel;
   group: THREE.Group;
   attackCooldown: number;
   replanTimer: number;
@@ -78,6 +195,11 @@ type SkillState = {
 
 type NetworkPlayer = { id: string; name: string; x: number; z: number; yaw: number; hp: number; shielding: boolean };
 type RemotePlayer = { group: THREE.Group; target: THREE.Vector3; yaw: number };
+const WORLD_LOCATION_IDS: WorldLocationId[] = ['taganga', 'centro', 'rodadero', 'gaira', 'libano', 'mamatoco', 'bonda', 'brumalia'];
+
+function isWorldLocation(value: unknown): value is WorldLocationId {
+  return typeof value === 'string' && WORLD_LOCATION_IDS.includes(value as WorldLocationId);
+}
 
 export class RealtimeGame {
   private readonly root: HTMLElement;
@@ -85,12 +207,19 @@ export class RealtimeGame {
   private readonly worldMap: HTMLElement;
   private readonly mapLocationTitle: HTMLElement;
   private readonly mapLocationDescription: HTMLElement;
+  private readonly locationLabel: HTMLElement;
+  private readonly waypointLabel: HTMLElement;
   private readonly scene = new THREE.Scene();
-  private readonly camera = new THREE.PerspectiveCamera(72, 1, 0.1, 100);
+  private readonly camera = new THREE.PerspectiveCamera(72, 1, 0.1, 180);
   private readonly renderer: THREE.WebGLRenderer;
   private readonly raycaster = new THREE.Raycaster();
   private readonly pointerNdc = new THREE.Vector2();
   private readonly grid = new Grid(GRID_WIDTH, GRID_HEIGHT, OBSTACLES);
+  private currentLocation: WorldLocationId = 'brumalia';
+  private readonly ground = new THREE.Mesh(
+    new THREE.PlaneGeometry(GRID_WIDTH * CELL_SIZE + 12, GRID_HEIGHT * CELL_SIZE + 12),
+    new THREE.MeshStandardMaterial({ color: 0x304f3e, roughness: 1 }),
+  );
   private readonly treeTrunkGeometry = new THREE.CylinderGeometry(0.2, 0.38, 3.1, 9, 3);
   private readonly treeRootGeometry = new THREE.CylinderGeometry(0.36, 0.52, 0.52, 8);
   private readonly treeBranchGeometry = new THREE.CylinderGeometry(0.035, 0.13, 1.35, 7);
@@ -104,11 +233,10 @@ export class RealtimeGame {
     new THREE.MeshStandardMaterial({ color: 0x47784a, roughness: 0.96, flatShading: true }),
     new THREE.MeshStandardMaterial({ color: 0x527d4d, roughness: 0.96, flatShading: true }),
   ];
-  private readonly tiles: Array<{
-    cell: Cell;
-    mesh: THREE.Mesh<THREE.PlaneGeometry, THREE.MeshStandardMaterial>;
-    baseColor: THREE.Color;
-  }> = [];
+  private readonly tiles: Array<{ cell: Cell; baseColor: THREE.Color }> = [];
+  private terrainMesh!: THREE.InstancedMesh;
+  private readonly forestProps: THREE.Group[] = [];
+  private readonly coastalObstacleProps: THREE.Group[] = [];
   private readonly enemies: EnemyState[] = [];
   private readonly effects: VisualEffect[] = [];
   private readonly keys = new Set<string>();
@@ -118,7 +246,8 @@ export class RealtimeGame {
     water: { cooldown: 0 },
   };
 
-  private readonly playerCell: Cell = { x: 1, y: 1 };
+  private readonly playerCell: Cell = { ...WORLD_CENTERS.brumalia };
+  private destinationLocation: WorldLocationId | null = null;
   private playerHp = 100;
   private readonly playerMaxHp = 100;
   private playerSpeedBoost = 0;
@@ -178,6 +307,8 @@ export class RealtimeGame {
     this.worldMap = this.getElement('#world-map');
     this.mapLocationTitle = this.getElement('#map-location-title');
     this.mapLocationDescription = this.getElement('#map-location-description');
+    this.locationLabel = this.getElement('#location-label');
+    this.waypointLabel = this.getElement('#world-waypoint');
     this.hoverCard = this.getElement('#hover-card');
     this.hoverName = this.getElement('#hover-name');
     this.hoverRole = this.getElement('#hover-role');
@@ -208,6 +339,7 @@ export class RealtimeGame {
 
     this.configureWorld();
     this.createTerrain();
+    this.applyLocationAppearance(this.currentLocation);
     this.createEnemies();
     this.enemies.forEach((enemy) => this.setEnemyCombatRing(enemy, true));
     this.shieldVisual = this.createShieldVisual();
@@ -223,51 +355,68 @@ export class RealtimeGame {
   }
 
   private configureWorld(): void {
-    this.scene.background = new THREE.Color(0x9cad94);
-    this.scene.fog = new THREE.Fog(0x9cad94, 24, 48);
+    const encounter = WORLD_ENCOUNTERS[this.currentLocation];
+    this.scene.background = new THREE.Color(encounter.background);
+    this.scene.fog = new THREE.Fog(encounter.background, 30, 64);
     this.scene.add(new THREE.HemisphereLight(0xe4f0dc, 0x344433, 2.1));
 
     const sunlight = new THREE.DirectionalLight(0xffe6b6, 2.5);
     sunlight.position.set(-8, 18, -10);
     this.scene.add(sunlight);
 
-    const ground = new THREE.Mesh(
-      new THREE.PlaneGeometry(90, 90),
-      new THREE.MeshStandardMaterial({ color: 0x304f3e, roughness: 1 }),
-    );
-    ground.rotation.x = -Math.PI / 2;
-    ground.position.y = -0.08;
-    this.scene.add(ground);
+    this.ground.rotation.x = -Math.PI / 2;
+    this.ground.position.y = -0.08;
+    this.scene.add(this.ground);
   }
 
   private createTerrain(): void {
     const geometry = new THREE.PlaneGeometry(CELL_SIZE * 0.985, CELL_SIZE * 0.985);
-    const edges = new THREE.EdgesGeometry(geometry);
+    this.terrainMesh = new THREE.InstancedMesh(
+      geometry,
+      new THREE.MeshStandardMaterial({ color: 0xffffff, roughness: 0.95 }),
+      GRID_WIDTH * GRID_HEIGHT,
+    );
+    const transform = new THREE.Object3D();
+    let instance = 0;
 
     for (let y = 0; y < GRID_HEIGHT; y++) {
       for (let x = 0; x < GRID_WIDTH; x++) {
         const cell = { x, y };
-        const baseColor = new THREE.Color((x + y) % 2 === 0 ? 0x466d50 : 0x3d6249);
-        const material = new THREE.MeshStandardMaterial({ color: baseColor, roughness: 0.95 });
-        const tile = new THREE.Mesh(geometry, material);
+        const region = this.locationAtCell(cell);
+        const palette = WORLD_ENCOUNTERS[region].tiles;
+        const baseColor = new THREE.Color((x + y) % 2 === 0 ? palette[0] : palette[1]);
         const position = this.cellToWorld(cell);
-        tile.rotation.x = -Math.PI / 2;
-        tile.position.set(position.x, 0.015, position.z);
-        tile.userData.cell = cell;
-        this.scene.add(tile);
-        this.tiles.push({ cell, mesh: tile, baseColor });
-
-        const outline = new THREE.LineSegments(
-          edges,
-          new THREE.LineBasicMaterial({ color: 0xb7c89a, transparent: true, opacity: 0.28 }),
-        );
-        outline.rotation.x = -Math.PI / 2;
-        outline.position.set(position.x, 0.03, position.z);
-        this.scene.add(outline);
+        transform.position.set(position.x, 0.015, position.z);
+        transform.rotation.set(-Math.PI / 2, 0, 0);
+        transform.scale.set(1, 1, 1);
+        transform.updateMatrix();
+        this.terrainMesh.setMatrixAt(instance++, transform.matrix);
+        this.terrainMesh.setColorAt(instance - 1, baseColor);
+        this.tiles.push({ cell, baseColor });
       }
     }
+    this.terrainMesh.instanceMatrix.needsUpdate = true;
+    if (this.terrainMesh.instanceColor) this.terrainMesh.instanceColor.needsUpdate = true;
+    this.scene.add(this.terrainMesh);
 
-    OBSTACLES.forEach(([x, y]) => this.createTree({ x, y }));
+    WORLD_ROUTES.forEach(([from, to]) => {
+      const start = this.cellToWorld(WORLD_CENTERS[from]);
+      const end = this.cellToWorld(WORLD_CENTERS[to]);
+      const dx = end.x - start.x; const dz = end.z - start.z;
+      const road = new THREE.Mesh(
+        new THREE.BoxGeometry(Math.hypot(dx, dz) + 2, 0.04, 3.2),
+        new THREE.MeshStandardMaterial({ color: 0x9a8965, roughness: 1 }),
+      );
+      road.position.set((start.x + end.x) / 2, 0.045, (start.z + end.z) / 2);
+      road.rotation.y = -Math.atan2(dz, dx);
+      this.scene.add(road);
+    });
+
+    OBSTACLES.forEach(([x, y]) => {
+      const cell = { x, y };
+      this.createTree(cell);
+      this.createCoastalRocks(cell);
+    });
     this.createForestEdge();
   }
 
@@ -276,7 +425,43 @@ export class RealtimeGame {
     const position = this.cellToWorld(cell);
     tree.position.set(position.x, 0, position.z);
     tree.userData.cell = cell;
+    tree.userData.worldLocation = this.locationAtCell(cell);
+    this.forestProps.push(tree);
     this.scene.add(tree);
+  }
+
+  private createCoastalRocks(cell: Cell): void {
+    const group = new THREE.Group();
+    const position = this.cellToWorld(cell);
+    group.position.set(position.x, 0, position.z);
+    group.userData.worldLocation = this.locationAtCell(cell);
+    for (let index = 0; index < 4; index++) {
+      const size = 0.42 + ((cell.x * 7 + cell.y * 3 + index) % 4) * 0.1;
+      const rock = new THREE.Mesh(
+        new THREE.IcosahedronGeometry(size, 0),
+        new THREE.MeshStandardMaterial({
+          color: [0x817d70, 0x9b927e, 0x6e786f][(cell.x + cell.y + index) % 3],
+          roughness: 0.98,
+          flatShading: true,
+        }),
+      );
+      rock.position.set((index - 1.5) * 0.38, size * 0.42, Math.sin(index * 2.1) * 0.3);
+      rock.scale.set(1.15, 0.72 + (index % 2) * 0.16, 0.9);
+      group.add(rock);
+    }
+    this.coastalObstacleProps.push(group);
+    this.scene.add(group);
+  }
+
+  private applyLocationAppearance(location: WorldLocationId): void {
+    this.forestProps.forEach((object) => {
+      const region = object.userData.worldLocation as WorldLocationId | undefined;
+      object.visible = !region || !COASTAL_LOCATIONS.has(region);
+    });
+    this.coastalObstacleProps.forEach((object) => {
+      const region = object.userData.worldLocation as WorldLocationId | undefined;
+      object.visible = Boolean(region && COASTAL_LOCATIONS.has(region));
+    });
   }
 
   private createTreeModel(seed: number, detailed: boolean): THREE.Group {
@@ -336,32 +521,35 @@ export class RealtimeGame {
   }
 
   private createForestEdge(): void {
-    const treeCount = 28;
-    for (let index = 0; index < treeCount; index++) {
-      const angle = (index / treeCount) * Math.PI * 2;
-      const radius = 15 + (index % 4) * 0.8;
+    const edgeCells: Cell[] = [];
+    for (let x = 0; x < GRID_WIDTH; x += 8) edgeCells.push({ x, y: 0 }, { x, y: GRID_HEIGHT - 1 });
+    for (let y = 8; y < GRID_HEIGHT - 1; y += 8) edgeCells.push({ x: 0, y }, { x: GRID_WIDTH - 1, y });
+    edgeCells.forEach((cell, index) => {
       const tree = this.createTreeModel(900 + index * 29, false);
-      tree.position.set(Math.cos(angle) * radius, 0, Math.sin(angle) * radius);
+      const position = this.cellToWorld(cell);
+      tree.position.set(position.x, 0, position.z);
+      tree.userData.worldEdge = true;
+      this.forestProps.push(tree);
       this.scene.add(tree);
-    }
+    });
   }
 
   private createEnemies(): void {
-    const definitions = [
-      { id: 'mossling', name: 'Musguito', cell: { x: 8, y: 2 }, hp: 72, color: 0x607a4c },
-      { id: 'thornling', name: 'Espinajo', cell: { x: 9, y: 2 }, hp: 82, color: 0x8c4f43 },
-      { id: 'mireling', name: 'Lodoso', cell: { x: 9, y: 3 }, hp: 78, color: 0x536e7e },
-      { id: 'wildling', name: 'Silvestre', cell: { x: 5, y: 9 }, hp: 90, color: 0x80633f },
-    ];
+    const definitions = WORLD_ENCOUNTERS[this.currentLocation].enemies;
 
     definitions.forEach((definition, index) => {
-      const group = this.createMaskedArcher(definition.color, index);
-      const position = this.cellToWorld(definition.cell);
+      const center = WORLD_CENTERS[this.currentLocation];
+      const cell = { x: center.x + definition.cell.x - 1, y: center.y + definition.cell.y - 1 };
+      const group = definition.model === 'crab'
+        ? this.createCrab(definition.color, index)
+        : this.createMaskedArcher(definition.color, index);
+      const position = this.cellToWorld(cell);
       group.position.set(position.x, 0, position.z);
       group.userData.enemyId = definition.id;
       this.scene.add(group);
       this.enemies.push({
         ...definition,
+        cell,
         maxHp: definition.hp,
         group,
         attackCooldown: 1.3 + index * 0.35,
@@ -371,7 +559,7 @@ export class RealtimeGame {
         stepStart: new THREE.Vector3(),
         stepEnd: new THREE.Vector3(),
         slowTimer: 0,
-        lastKnownPlayerCell: { x: 1, y: 1 },
+        lastKnownPlayerCell: { ...this.playerCell },
         lastSeenTimer: 0,
         searchTimer: 0,
         searchTarget: null,
@@ -384,6 +572,69 @@ export class RealtimeGame {
         isHiding: false,
       });
     });
+  }
+
+  private createCrab(color: number, variant: number): THREE.Group {
+    const crab = new THREE.Group();
+    const shellMaterial = new THREE.MeshStandardMaterial({ color, roughness: 0.7, metalness: 0.04, flatShading: true });
+    const undersideMaterial = new THREE.MeshStandardMaterial({ color: 0xd6b28a, roughness: 0.9 });
+    const jointMaterial = new THREE.MeshStandardMaterial({ color: new THREE.Color(color).multiplyScalar(0.78), roughness: 0.75 });
+    const eyeMaterial = new THREE.MeshStandardMaterial({ color: 0x171a17, roughness: 0.35 });
+
+    const underside = new THREE.Mesh(new THREE.SphereGeometry(0.55, 12, 8), undersideMaterial);
+    underside.scale.set(1.2, 0.42, 0.82);
+    underside.position.y = 0.35;
+    crab.add(underside);
+
+    const shell = new THREE.Mesh(new THREE.SphereGeometry(0.62, 12, 9), shellMaterial);
+    shell.scale.set(1.22, 0.62, 0.9);
+    shell.position.y = 0.58;
+    crab.add(shell);
+
+    for (const side of [-1, 1]) {
+      for (let index = 0; index < 3; index++) {
+        const leg = new THREE.Mesh(new THREE.CylinderGeometry(0.055, 0.075, 0.62, 6), jointMaterial);
+        const z = (index - 1) * 0.28;
+        leg.position.set(side * 0.64, 0.3, z - 0.03);
+        leg.rotation.z = side * -0.76;
+        leg.rotation.x = (index - 1) * 0.24;
+        crab.add(leg);
+      }
+
+      const arm = new THREE.Mesh(new THREE.CylinderGeometry(0.075, 0.1, 0.48, 7), jointMaterial);
+      arm.position.set(side * 0.58, 0.48, 0.42);
+      arm.rotation.z = side * -0.58;
+      crab.add(arm);
+
+      const claw = new THREE.Mesh(new THREE.SphereGeometry(0.2 + (variant % 2) * 0.035, 9, 7), shellMaterial);
+      claw.scale.set(1.15, 0.85, 1.05);
+      claw.position.set(side * 0.82, 0.38, 0.61);
+      crab.add(claw);
+
+      const eyeStem = new THREE.Mesh(new THREE.CylinderGeometry(0.035, 0.045, 0.2, 6), jointMaterial);
+      eyeStem.position.set(side * 0.2, 0.86, 0.35);
+      eyeStem.rotation.x = -0.3;
+      crab.add(eyeStem);
+
+      const eye = new THREE.Mesh(new THREE.SphereGeometry(0.075, 8, 6), eyeMaterial);
+      eye.position.set(side * 0.2, 0.98, 0.38);
+      crab.add(eye);
+    }
+
+    const healthBack = new THREE.Mesh(
+      new THREE.BoxGeometry(0.95, 0.075, 0.035),
+      new THREE.MeshBasicMaterial({ color: 0x17221c }),
+    );
+    healthBack.position.set(0, 1.45, 0);
+    crab.add(healthBack);
+    const healthFill = new THREE.Mesh(
+      new THREE.BoxGeometry(0.9, 0.045, 0.045),
+      new THREE.MeshBasicMaterial({ color: 0xe16e60 }),
+    );
+    healthFill.position.set(0, 1.45, -0.025);
+    healthFill.userData.healthBar = true;
+    crab.add(healthFill);
+    return crab;
   }
 
   private createMaskedArcher(color: number, variant: number): THREE.Group {
@@ -666,8 +917,19 @@ export class RealtimeGame {
         this.roomConnected.hidden = false;
         this.roomButton.textContent = `SALA · ${this.roomCode}`;
         this.roomStatus.textContent = 'Conectados en la misma sala.';
+        if (isWorldLocation(message.location) && message.location !== this.currentLocation) {
+          this.enterLocation(message.location, false);
+        }
         const players = Array.isArray(message.players) ? message.players as NetworkPlayer[] : [];
-        players.forEach((player) => { if (player.id !== this.localPlayerId) this.addRemotePlayer(player); });
+        players.forEach((player) => {
+          if (player.id === this.localPlayerId) {
+            this.camera.position.set(player.x, PLAYER_HEIGHT, player.z);
+            this.yaw = player.yaw;
+            this.playerCell.x = this.worldToCell(player.x, player.z).x;
+            this.playerCell.y = this.worldToCell(player.x, player.z).y;
+            this.applyCameraRotation();
+          } else this.addRemotePlayer(player);
+        });
         this.updateRoomMembers(players.length);
       } else if (message.type === 'player-joined') {
         const player = message.player as NetworkPlayer;
@@ -943,11 +1205,93 @@ export class RealtimeGame {
   private selectWorldLocation(location: WorldLocationId): void {
     const description = WORLD_LOCATION_DESCRIPTIONS[location];
     if (!description) return;
+    this.destinationLocation = location === this.currentLocation ? null : location;
     this.mapLocationButtons.forEach((button, id) => {
-      button.setAttribute('aria-pressed', String(id === location));
+      button.setAttribute('aria-pressed', String(id === this.destinationLocation));
+      button.classList.toggle('current', id === this.currentLocation);
+      button.classList.toggle('destination', id === this.destinationLocation);
     });
     this.mapLocationTitle.textContent = this.mapLocationButtons.get(location)?.textContent?.trim() ?? '';
-    this.mapLocationDescription.textContent = description;
+    this.mapLocationDescription.textContent = location === this.currentLocation
+      ? `Ya estás en este sector. ${description}`
+      : `Destino marcado. Sigue los caminos y recorre el mundo hasta llegar. ${description}`;
+    if (this.destinationLocation) {
+      this.setNotice(`Destino marcado: ${this.mapLocationTitle.textContent}. Sigue el indicador y camina por las rutas.`);
+    } else {
+      this.setNotice(`Ya estás en ${this.mapLocationTitle.textContent}.`);
+    }
+    this.closeWorldMap();
+  }
+
+  private enterLocation(location: WorldLocationId, syncRoom = true): void {
+    if (location === this.currentLocation) {
+      return;
+    }
+
+    this.clearTransientEffects();
+    this.clearEnemies();
+    this.currentLocation = location;
+    this.locationLabel.textContent = location === 'brumalia' ? 'EL BOSQUE DE' : this.mapLocationButtons.get(location)?.textContent?.trim().toUpperCase() ?? '';
+    this.mapLocationTitle.textContent = this.mapLocationButtons.get(location)?.textContent?.trim() ?? '';
+    this.mapLocationDescription.textContent = WORLD_LOCATION_DESCRIPTIONS[location];
+    const encounter = WORLD_ENCOUNTERS[location];
+    this.applyLocationAppearance(location);
+    this.scene.background = new THREE.Color(encounter.background);
+    if (this.scene.fog instanceof THREE.Fog) this.scene.fog.color.setHex(encounter.background);
+    (this.ground.material as THREE.MeshStandardMaterial).color.setHex(encounter.ground);
+    this.createEnemies();
+    this.enemies.forEach((enemy) => this.setEnemyCombatRing(enemy, true));
+    if (this.phase !== 'defeat') this.phase = 'combat';
+    this.destinationLocation = this.destinationLocation === location ? null : this.destinationLocation;
+
+    this.mapLocationButtons.forEach((button, id) => {
+      button.setAttribute('aria-pressed', String(id === this.destinationLocation));
+      button.classList.toggle('current', id === location);
+      button.classList.toggle('destination', id === this.destinationLocation);
+    });
+    this.setNotice(location === 'rodadero'
+      ? 'Llegaste a El Rodadero. ¡Cuidado con los cangrejos!'
+      : `Llegaste a ${this.mapLocationTitle.textContent}.`);
+    this.updateHud();
+
+    if (syncRoom && this.roomJoined && this.roomSocket?.readyState === WebSocket.OPEN) {
+      this.roomSocket.send(JSON.stringify({ type: 'travel-to-location', location }));
+    }
+  }
+
+  private clearTransientEffects(): void {
+    this.effects.forEach((effect) => {
+      this.scene.remove(effect.object);
+      effect.object.traverse((object) => {
+        if (object instanceof THREE.Mesh) object.geometry.dispose();
+        const material = 'material' in object ? object.material : undefined;
+        const materials = Array.isArray(material) ? material : material ? [material] : [];
+        materials.forEach((entry) => {
+          const map = 'map' in entry ? entry.map : null;
+          map?.dispose();
+          entry.dispose();
+        });
+      });
+    });
+    this.effects.length = 0;
+  }
+
+  private clearEnemies(): void {
+    this.enemies.forEach((enemy) => {
+      this.scene.remove(enemy.group);
+      enemy.group.traverse((object) => {
+        if (object instanceof THREE.Mesh) object.geometry.dispose();
+        const material = 'material' in object ? object.material : undefined;
+        const materials = Array.isArray(material) ? material : material ? [material] : [];
+        materials.forEach((entry) => {
+          const map = 'map' in entry ? entry.map : null;
+          map?.dispose();
+          entry.dispose();
+        });
+      });
+    });
+    this.enemies.length = 0;
+    this.hoverCard.hidden = true;
   }
 
   private handleFire(): void {
@@ -1032,7 +1376,7 @@ export class RealtimeGame {
   private shootPlayerArrow(enemy: EnemyState | null): void {
     if (this.bowCooldown > 0 || (enemy !== null && enemy.hp <= 0)) return;
     this.bowCooldown = 0.34;
-    this.setNotice(enemy ? `Flecha en camino a ${enemy.name}.` : 'Flecha disparada; apunta a un arquero para acertar.');
+    this.setNotice(enemy ? `Flecha en camino a ${enemy.name}.` : 'Flecha disparada; apunta a un enemigo para acertar.');
     const direction = this.camera.getWorldDirection(new THREE.Vector3());
     const start = this.camera.position.clone().add(direction.clone().multiplyScalar(0.75));
     const end = enemy
@@ -1110,6 +1454,8 @@ export class RealtimeGame {
     if (this.grid.isWalkable(cell.x, cell.y)) {
       this.playerCell.x = cell.x;
       this.playerCell.y = cell.y;
+      const location = this.locationAtCell(cell);
+      if (location !== this.currentLocation) this.enterLocation(location);
     }
   }
 
@@ -1157,7 +1503,7 @@ export class RealtimeGame {
         enemy.lastSeenTimer += delta;
       }
 
-      if (enemy.coverTarget) {
+      if (enemy.model !== 'crab' && enemy.coverTarget) {
         if (
           !enemy.stepTarget
           && enemy.cell.x === enemy.coverTarget.x
@@ -1175,12 +1521,12 @@ export class RealtimeGame {
         return;
       }
 
-      if (enemy.isHiding) {
+      if (enemy.model !== 'crab' && enemy.isHiding) {
         if (!canSeePlayer && enemy.coverTimer > 0) return;
         enemy.isHiding = false;
       }
 
-      if (enemy.needsCover && enemy.coverCooldown === 0) {
+      if (enemy.model !== 'crab' && enemy.needsCover && enemy.coverCooldown === 0) {
         enemy.coverCooldown = 5;
         const path = this.findCoverPath(enemy, playerCell);
         enemy.coverTarget = path?.[path.length - 1] ?? null;
@@ -1193,8 +1539,10 @@ export class RealtimeGame {
       }
 
       if (canSeePlayer) {
-        if (distance > 8.5) this.updateEnemyChase(enemy, this.cellToWorld(playerCell), delta);
-        if (distance <= 12 && enemy.attackCooldown === 0) this.launchEnemyAttack(enemy);
+        const preferredRange = enemy.model === 'crab' ? 2.2 : 8.5;
+        const attackRange = enemy.model === 'crab' ? 2.8 : 12;
+        if (distance > preferredRange) this.updateEnemyChase(enemy, this.cellToWorld(playerCell), delta);
+        if (distance <= attackRange && enemy.attackCooldown === 0) this.launchEnemyAttack(enemy);
         return;
       }
 
@@ -1312,6 +1660,24 @@ export class RealtimeGame {
 
   private launchEnemyAttack(enemy: EnemyState): void {
     if (enemy.hp <= 0 || this.phase !== 'combat' || !this.hasLivingEnemies()) return;
+    if (enemy.model === 'crab') {
+      enemy.attackCooldown = 2.4;
+      const originalScale = enemy.group.scale.clone();
+      this.addEffect(enemy.group, 360, (progress) => {
+        const pulse = progress < 0.5 ? 1 + progress * 0.38 : 1.19 - (progress - 0.5) * 0.38;
+        enemy.group.scale.set(originalScale.x * pulse, originalScale.y * pulse, originalScale.z * pulse);
+      }, () => {
+        enemy.group.scale.copy(originalScale);
+        if (enemy.hp <= 0 || this.phase !== 'combat') return;
+        const distance = Math.hypot(this.camera.position.x - enemy.group.position.x, this.camera.position.z - enemy.group.position.z);
+        if (distance > 3.1) return;
+        this.playRing(this.camera.position.clone().add(new THREE.Vector3(0, -0.8, 0)), 0xef8c55);
+        this.damagePlayer(12);
+        this.updateHud();
+      }, enemy);
+      this.setNotice(`${enemy.name} ataca con sus pinzas.`);
+      return;
+    }
     enemy.attackCooldown = 3.2;
     const start = enemy.group.position.clone().add(new THREE.Vector3(0, 1.55, 0));
     const end = this.camera.position.clone().add(new THREE.Vector3(0, -0.15, 0));
@@ -1596,6 +1962,22 @@ export class RealtimeGame {
     });
   }
 
+  private updateWaypoint(): void {
+    if (!this.destinationLocation) {
+      this.waypointLabel.hidden = true;
+      return;
+    }
+    const target = this.cellToWorld(WORLD_CENTERS[this.destinationLocation]);
+    const dx = target.x - this.camera.position.x;
+    const dz = target.z - this.camera.position.z;
+    const relative = Math.atan2(dx, -dz) - this.yaw;
+    const direction = ['↑', '↗', '→', '↘', '↓', '↙', '←', '↖'][((Math.round(relative / (Math.PI / 4)) % 8) + 8) % 8];
+    const distance = Math.round(Math.hypot(dx, dz));
+    const name = this.mapLocationButtons.get(this.destinationLocation)?.textContent?.trim() ?? '';
+    this.waypointLabel.textContent = `${direction} ${name} · ${distance} m`;
+    this.waypointLabel.hidden = false;
+  }
+
   private setNotice(message: string): void {
     this.notice = message;
     this.turnMessage.textContent = message;
@@ -1614,7 +1996,7 @@ export class RealtimeGame {
 
   private damageEnemy(enemy: EnemyState, amount: number): void {
     enemy.hp = Math.max(0, enemy.hp - amount);
-    if (enemy.hp > 0 && enemy.coverCooldown === 0) {
+    if (enemy.hp > 0 && enemy.model !== 'crab' && enemy.coverCooldown === 0) {
       enemy.needsCover = true;
       enemy.stepTarget = null;
       enemy.coverPath = [];
@@ -1636,7 +2018,7 @@ export class RealtimeGame {
         this.phase = 'victory';
         this.selectedSkill = null;
         this.cancelAllEnemyEffects();
-        this.setNotice('¡Bosque despejado! Ya no quedan arqueros.');
+      this.setNotice(`¡${this.mapLocationTitle.textContent || 'Zona'} despejada! Ya no quedan enemigos.`);
         this.updateHud();
       }
     }
@@ -1730,15 +2112,17 @@ export class RealtimeGame {
   }
 
   private pickCell(clientX: number, clientY: number): Cell | null {
-    const intersections = this.intersect(clientX, clientY, this.tiles.map((tile) => tile.mesh));
-    return intersections[0]?.object.userData.cell as Cell | undefined ?? null;
+    const intersections = this.intersect(clientX, clientY, [this.terrainMesh]);
+    const instanceId = intersections[0]?.instanceId;
+    return instanceId === undefined ? null : this.tiles[instanceId]?.cell ?? null;
   }
 
   private pickCellAtReticle(): Cell | null {
     this.pointerNdc.set(0, 0);
     this.raycaster.setFromCamera(this.pointerNdc, this.camera);
-    const intersections = this.raycaster.intersectObjects(this.tiles.map((tile) => tile.mesh), false);
-    return intersections[0]?.object.userData.cell as Cell | undefined ?? null;
+    const intersections = this.raycaster.intersectObject(this.terrainMesh, false);
+    const instanceId = intersections[0]?.instanceId;
+    return instanceId === undefined ? null : this.tiles[instanceId]?.cell ?? null;
   }
 
   private intersect(clientX: number, clientY: number, objects: THREE.Object3D[]): THREE.Intersection[] {
@@ -1757,6 +2141,16 @@ export class RealtimeGame {
       0,
       (cell.y - (GRID_HEIGHT - 1) / 2) * CELL_SIZE,
     );
+  }
+
+  private locationAtCell(cell: Cell): WorldLocationId {
+    return WORLD_LOCATION_IDS.reduce((nearest, location) => {
+      const center = WORLD_CENTERS[location];
+      const currentBest = WORLD_CENTERS[nearest];
+      return Math.hypot(cell.x - center.x, cell.y - center.y) < Math.hypot(cell.x - currentBest.x, cell.y - currentBest.y)
+        ? location
+        : nearest;
+    }, WORLD_LOCATION_IDS[0]);
   }
 
   private applyCameraRotation(): void {
@@ -1786,6 +2180,7 @@ export class RealtimeGame {
     }
 
     this.updatePlayerMovement(delta);
+    this.updateWaypoint();
     this.updateNetwork(delta);
     this.updateEnemies(delta);
     this.updateEffects(delta * 1000);
