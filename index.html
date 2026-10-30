@@ -1,0 +1,54 @@
+<!DOCTYPE html>
+<html lang="es">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Krikas | MMORPG de fantasía</title>
+    <link rel="stylesheet" href="styles.css" />
+  </head>
+  <body>
+    <div class="game-shell">
+      <header class="topbar">
+        <div class="brand">
+          <span class="brand-mark">K</span>
+          <div>
+            <p class="brand-subtitle">MMORPG de fantasía</p>
+            <h1>Krikas</h1>
+          </div>
+        </div>
+
+        <div class="hud">
+          <span id="levelText">Nivel 1</span>
+          <span id="hpText">HP: 100</span>
+          <span id="scoreText">Puntuación: 0</span>
+        </div>
+      </header>
+
+      <main class="main-stage">
+        <aside class="panel panel-left">
+          <h2>Héroe</h2>
+          <ul>
+            <li>Clase: Arquero</li>
+            <li>Raza: Krika</li>
+            <li>Arma: Arco de la luna</li>
+          </ul>
+        </aside>
+
+        <canvas id="gameCanvas" width="960" height="600"></canvas>
+
+        <aside class="panel panel-right">
+          <h2>Misión</h2>
+          <p>Defiende el bosque de Krikas y elimina a los invasores.</p>
+        </aside>
+      </main>
+
+      <div class="controls">
+        <span>Movimiento: WASD / Flechas</span>
+        <span>Apuntar: Ratón</span>
+        <span>Disparar: Click / Espacio</span>
+      </div>
+    </div>
+
+    <script src="game.js"></script>
+  </body>
+</html>

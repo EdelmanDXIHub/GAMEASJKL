@@ -1,0 +1,510 @@
+<!DOCTYPE html>
+<html lang="es">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="theme-color" content="#101819" />
+    <title>Krikas | Brumalia</title>
+    <style>
+      :root {
+        color-scheme: dark;
+        font-family: "Trebuchet MS", sans-serif;
+        color: #e7ece0;
+        background: #101819;
+        font-synthesis: none;
+        text-rendering: optimizeLegibility;
+      }
+
+      * { box-sizing: border-box; }
+      html, body { width: 100%; height: 100%; margin: 0; overflow: hidden; }
+      body { background: #101819; }
+      button { font: inherit; }
+
+      #app { position: relative; width: 100%; height: 100%; overflow: hidden; }
+      #world { position: absolute; inset: 0; }
+      #world canvas { display: block; width: 100%; height: 100%; }
+
+      .topbar {
+        position: absolute;
+        z-index: 3;
+        inset: 0 0 auto;
+        display: flex;
+        align-items: flex-start;
+        justify-content: space-between;
+        gap: 20px;
+        padding: 22px 28px;
+        background: linear-gradient(180deg, rgba(7, 14, 14, 0.88), rgba(7, 14, 14, 0));
+        pointer-events: none;
+      }
+
+      .brand { display: grid; gap: 3px; }
+      .brand small { color: #b7c3ac; font-size: 10px; letter-spacing: 0.16em; }
+      .brand strong { color: #f0d99c; font-family: Georgia, serif; font-size: 22px; }
+      .player-panel { display: flex; align-items: center; gap: 12px; }
+      .player-name { color: #f0d99c; font-weight: 700; }
+      .stat-pill, .turn-pill {
+        min-width: 100px;
+        padding: 8px 11px;
+        border: 1px solid rgba(220, 232, 210, 0.19);
+        background: rgba(13, 23, 22, 0.8);
+        font-size: 12px;
+      }
+      .stat-pill strong { color: #e9f1d8; }
+      .turn-pill { min-width: 125px; color: #f3d89a; text-align: center; }
+      #room-button {
+        pointer-events: auto;
+        min-height: 34px;
+        padding: 0 11px;
+        border: 1px solid rgba(220, 202, 151, 0.4);
+        background: rgba(25, 42, 34, 0.88);
+        color: #f0d99c;
+        font-size: 11px;
+        font-weight: 700;
+        cursor: pointer;
+      }
+      .shield-pill { color: #a9c5b4; }
+      .shield-pill.shield-active { border-color: rgba(120, 239, 239, 0.75); color: #9af4ed; }
+
+      #turn-message {
+        position: absolute;
+        z-index: 3;
+        top: 88px;
+        left: 50%;
+        max-width: min(460px, calc(100vw - 32px));
+        padding: 9px 14px;
+        border: 1px solid rgba(227, 213, 171, 0.18);
+        background: rgba(13, 23, 22, 0.68);
+        color: #e6e9d8;
+        font-size: 13px;
+        text-align: center;
+        transform: translateX(-50%);
+        pointer-events: none;
+      }
+
+      .reticle {
+        position: absolute;
+        z-index: 2;
+        top: 50%;
+        left: 50%;
+        width: 13px;
+        height: 13px;
+        border: 1px solid rgba(244, 241, 220, 0.88);
+        border-radius: 50%;
+        box-shadow: 0 0 12px rgba(0, 0, 0, 0.8);
+        transform: translate(-50%, -50%);
+        pointer-events: none;
+      }
+      .reticle::after {
+        content: "";
+        position: absolute;
+        inset: 4px;
+        border-radius: 50%;
+        background: #f3d891;
+      }
+      .reticle.aiming {
+        width: 21px;
+        height: 21px;
+        border-color: #9af4ed;
+        box-shadow: 0 0 14px rgba(111, 240, 230, 0.8);
+      }
+      .reticle.captured::before, .reticle.captured::after {
+        content: "";
+        position: absolute;
+        inset: 5px -5px auto;
+        height: 1px;
+        background: rgba(244, 241, 220, 0.88);
+      }
+      .reticle.captured::after {
+        inset: -5px auto -5px 5px;
+        width: 1px;
+        height: auto;
+      }
+      .pointer-locked, .pointer-locked * { cursor: none !important; }
+
+      .hover-card {
+        position: absolute;
+        z-index: 5;
+        width: 218px;
+        padding: 13px 15px;
+        border: 1px solid rgba(228, 213, 165, 0.5);
+        background: rgba(11, 19, 18, 0.94);
+        box-shadow: 0 12px 32px rgba(0, 0, 0, 0.38);
+        pointer-events: none;
+      }
+      .hover-card[hidden] { display: none; }
+      .hover-card h2 { margin: 0; color: #f0d99c; font-family: Georgia, serif; font-size: 17px; }
+      .hover-card p { margin: 4px 0 10px; color: #b7c4b8; font-size: 11px; }
+      .health-track { height: 6px; background: #293330; }
+      .health-track span { display: block; width: 100%; height: 100%; background: #77c58b; transition: width 120ms linear; }
+      .hover-stats { display: flex; justify-content: space-between; margin-top: 7px; color: #e1e9dd; font-size: 11px; }
+
+      #world-map {
+        position: absolute;
+        z-index: 15;
+        inset: 0;
+        display: grid;
+        place-items: center;
+        padding: 24px;
+        background: rgba(7, 13, 14, 0.84);
+        backdrop-filter: blur(5px);
+      }
+      #world-map[hidden] { display: none; }
+      .world-map-panel {
+        display: grid;
+        grid-template-rows: auto minmax(0, 1fr);
+        width: min(1120px, 100%);
+        max-height: min(720px, calc(100dvh - 48px));
+        border: 1px solid rgba(220, 202, 151, 0.38);
+        background: #14201d;
+        box-shadow: 0 28px 80px rgba(0, 0, 0, 0.55);
+      }
+      .map-header {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 16px;
+        padding: 16px 20px;
+        border-bottom: 1px solid rgba(220, 202, 151, 0.2);
+      }
+      .map-header small { display: block; color: #aab9a8; font-size: 10px; letter-spacing: 0.14em; }
+      .map-header h1 { margin: 3px 0 0; color: #f0d99c; font-family: Georgia, serif; font-size: 22px; }
+      #close-map {
+        width: 40px;
+        height: 40px;
+        border: 1px solid rgba(220, 232, 210, 0.24);
+        background: #23332d;
+        color: #edf2e8;
+        font-size: 22px;
+        cursor: pointer;
+      }
+      .map-content {
+        display: grid;
+        grid-template-columns: minmax(0, 1fr) 250px;
+        min-height: 0;
+      }
+      .map-art {
+        position: relative;
+        min-height: 440px;
+        overflow: hidden;
+        background: linear-gradient(140deg, #718856, #3f6246 52%, #354e3d);
+        isolation: isolate;
+      }
+      .map-sea {
+        position: absolute;
+        inset: 0 auto 0 0;
+        width: 32%;
+        background: repeating-linear-gradient(165deg, transparent 0 22px, rgba(152, 203, 210, 0.12) 23px 24px), linear-gradient(115deg, #315c70, #47798a);
+        clip-path: polygon(0 0, 83% 0, 76% 13%, 90% 27%, 74% 40%, 88% 55%, 70% 70%, 82% 86%, 67% 100%, 0 100%);
+        z-index: -1;
+      }
+      .map-ridge {
+        position: absolute;
+        top: 0;
+        right: 0;
+        width: 42%;
+        height: 100%;
+        background: repeating-linear-gradient(135deg, transparent 0 38px, rgba(29, 61, 43, 0.45) 39px 44px), linear-gradient(145deg, rgba(119, 142, 83, 0.72), rgba(54, 91, 56, 0.8));
+        clip-path: polygon(20% 0, 100% 0, 100% 100%, 0 100%, 16% 78%, 8% 59%, 25% 43%, 13% 22%);
+        z-index: -1;
+      }
+      .map-road {
+        position: absolute;
+        height: 3px;
+        border-top: 2px dashed rgba(226, 205, 143, 0.62);
+        transform-origin: left center;
+        pointer-events: none;
+      }
+      .map-road.road-one { left: 28%; top: 22%; width: 56%; transform: rotate(20deg); }
+      .map-road.road-two { left: 34%; top: 75%; width: 50%; transform: rotate(-35deg); }
+      .map-location {
+        position: absolute;
+        display: flex;
+        align-items: center;
+        gap: 7px;
+        padding: 5px 7px;
+        border: 1px solid transparent;
+        background: rgba(19, 31, 25, 0.48);
+        color: #f0f0d9;
+        font-size: 12px;
+        font-weight: 700;
+        text-shadow: 0 1px 3px #122018;
+        white-space: nowrap;
+        cursor: pointer;
+      }
+      .map-location::before {
+        content: "";
+        width: 8px;
+        height: 8px;
+        border: 2px solid #f0d99c;
+        border-radius: 50%;
+        background: #486f4d;
+      }
+      .map-location:hover, .map-location[aria-pressed="true"] { border-color: rgba(240, 217, 156, 0.7); background: rgba(21, 38, 29, 0.92); }
+      .map-location.current::before { background: #e3b75b; box-shadow: 0 0 12px #f6d881; }
+      .map-compass {
+        position: absolute;
+        top: 14px;
+        right: 16px;
+        color: #f0d99c;
+        font-family: Georgia, serif;
+        font-size: 12px;
+      }
+      .map-details {
+        padding: 20px 17px;
+        border-left: 1px solid rgba(220, 202, 151, 0.2);
+        background: #111b19;
+      }
+      .map-details small { color: #aab9a8; font-size: 10px; letter-spacing: 0.12em; }
+      .map-details h2 { margin: 7px 0 9px; color: #f0d99c; font-family: Georgia, serif; font-size: 20px; }
+      .map-details p { margin: 0; color: #c3cec1; font-size: 13px; line-height: 1.55; }
+      .map-region-list { display: grid; gap: 6px; margin-top: 20px; }
+      .map-region-list span { padding-top: 8px; border-top: 1px solid rgba(220, 232, 210, 0.1); color: #aab9a8; font-size: 11px; }
+
+      #room-lobby {
+        position: absolute;
+        z-index: 16;
+        inset: 0;
+        display: grid;
+        place-items: center;
+        padding: 20px;
+        background: rgba(7, 13, 14, 0.84);
+        backdrop-filter: blur(5px);
+      }
+      #room-lobby[hidden] { display: none; }
+      .room-panel {
+        display: grid;
+        gap: 15px;
+        width: min(460px, 100%);
+        padding: 22px;
+        border: 1px solid rgba(220, 202, 151, 0.38);
+        background: #14201d;
+        box-shadow: 0 24px 70px rgba(0, 0, 0, 0.5);
+      }
+      .room-header { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; }
+      .room-header small { color: #aab9a8; font-size: 10px; letter-spacing: 0.13em; }
+      .room-header h2 { margin: 4px 0 0; color: #f0d99c; font-family: Georgia, serif; font-size: 22px; }
+      .room-close { width: 34px; height: 34px; border: 1px solid rgba(220, 232, 210, 0.2); background: #23332d; color: #edf2e8; font-size: 20px; cursor: pointer; }
+      .room-field { display: grid; gap: 6px; color: #c4d0c3; font-size: 11px; }
+      .room-field input { width: 100%; min-height: 40px; padding: 0 11px; border: 1px solid rgba(220, 232, 210, 0.2); background: #0c1513; color: #eef2e7; }
+      .room-actions { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+      .room-action, .room-secondary { min-height: 42px; padding: 0 12px; border: 1px solid rgba(220, 202, 151, 0.45); background: #354c3c; color: #f0eddc; font-weight: 700; cursor: pointer; }
+      .room-secondary { border-color: rgba(220, 232, 210, 0.2); background: #202e29; }
+      .room-action:disabled, .room-secondary:disabled { opacity: 0.48; cursor: default; }
+      #room-status { min-height: 18px; color: #c5b68f; font-size: 12px; }
+      #room-connected { display: grid; gap: 8px; padding-top: 12px; border-top: 1px solid rgba(220, 232, 210, 0.15); }
+      #room-code-display { color: #f0d99c; font-size: 24px; font-weight: 800; letter-spacing: 0.12em; }
+      #room-members { color: #bdc9bc; font-size: 12px; }
+
+      #defeat-menu {
+        position: absolute;
+        z-index: 20;
+        inset: 0;
+        display: grid;
+        place-items: center;
+        padding: 20px;
+        background: rgba(8, 14, 14, 0.72);
+        backdrop-filter: blur(5px);
+      }
+      #defeat-menu[hidden] { display: none; }
+      .defeat-panel {
+        width: min(390px, 100%);
+        padding: 30px;
+        border: 1px solid rgba(230, 178, 116, 0.48);
+        background: #111b19;
+        box-shadow: 0 24px 70px rgba(0, 0, 0, 0.55);
+        text-align: center;
+      }
+      .defeat-panel small { color: #c5b68f; font-size: 10px; letter-spacing: 0.16em; }
+      .defeat-panel h1 { margin: 10px 0 7px; color: #f0d99c; font-family: Georgia, serif; font-size: 30px; }
+      .defeat-panel p { margin: 0 0 22px; color: #bac6bb; font-size: 13px; }
+      #restart-game {
+        min-height: 46px;
+        padding: 0 20px;
+        border: 1px solid #e1c47c;
+        background: #695b37;
+        color: #fff3d4;
+        font-weight: 700;
+        cursor: pointer;
+      }
+      #restart-game:hover { background: #806b40; }
+
+      .bottom-panel {
+        position: absolute;
+        z-index: 3;
+        inset: auto 0 0;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        gap: 12px;
+        min-height: 92px;
+        padding: 15px 20px 20px;
+        background: linear-gradient(0deg, rgba(7, 14, 14, 0.96), rgba(7, 14, 14, 0.58));
+      }
+      .skills { display: flex; gap: 8px; }
+      .skill-button, .end-button {
+        min-width: 136px;
+        min-height: 52px;
+        padding: 8px 13px;
+        border: 1px solid rgba(219, 228, 208, 0.22);
+        background: rgba(34, 55, 46, 0.94);
+        color: #e8eee1;
+        cursor: pointer;
+        text-align: left;
+      }
+      .skill-button:hover, .skill-button[aria-pressed="true"] { border-color: #dfc481; background: #695b37; }
+      .skill-button:disabled { opacity: 0.46; cursor: default; }
+      .skill-button strong { display: block; font-size: 12px; }
+      .skill-button small { display: block; margin-top: 3px; color: #b8c5b7; font-size: 10px; }
+      .controls-note { position: absolute; right: 20px; bottom: 102px; color: rgba(228, 235, 222, 0.72); font-size: 10px; }
+
+      @media (max-width: 700px) {
+        .topbar { padding: 14px; }
+        .brand strong { font-size: 18px; }
+        .player-panel { gap: 6px; }
+        .player-name { display: none; }
+        .stat-pill, .turn-pill { min-width: auto; padding: 7px 8px; font-size: 10px; }
+        #room-button { min-height: 30px; padding: 0 7px; font-size: 9px; }
+        #turn-message { top: 73px; font-size: 11px; }
+        .bottom-panel { flex-wrap: wrap; gap: 7px; padding: 9px 8px 12px; }
+        .skills { gap: 5px; }
+        .skill-button { min-width: 90px; min-height: 46px; padding: 6px; }
+        .skill-button strong { font-size: 10px; }
+        .skill-button small { font-size: 9px; }
+        .end-button { min-width: 105px; min-height: 46px; padding: 6px; font-size: 10px; }
+        .controls-note { display: none; }
+        #world-map { padding: 10px; }
+        .world-map-panel { max-height: calc(100dvh - 20px); }
+        .map-content { grid-template-columns: minmax(0, 1fr) 145px; }
+        .map-art { min-height: 370px; }
+        .map-location { gap: 4px; padding: 4px; font-size: 9px; }
+        .map-location::before { width: 6px; height: 6px; }
+        .map-details { padding: 12px 10px; }
+        .map-details h2 { font-size: 15px; }
+        .map-details p { font-size: 11px; }
+        .map-region-list { gap: 4px; margin-top: 12px; }
+      }
+    </style>
+  </head>
+  <body>
+    <main id="app">
+      <div id="world" aria-label="Vista en primera persona del bosque de Brumalia"></div>
+      <header class="topbar">
+        <div class="brand">
+          <small>EL BOSQUE DE</small>
+          <strong>KRIKAS</strong>
+        </div>
+        <div class="player-panel">
+          <span class="player-name">Krika, Arquera</span>
+          <span class="stat-pill"><strong id="player-health">PV 100 / 100</strong></span>
+          <span id="player-shield" class="stat-pill shield-pill">ESCUDO · MANTENER Q</span>
+          <span class="stat-pill"><strong id="enemy-count">ENEMIGOS 4</strong></span>
+          <span id="turn-indicator" class="turn-pill">COMBATE ACTIVO</span>
+          <button id="room-button" type="button">SALA · SOLO</button>
+        </div>
+      </header>
+      <div id="turn-message">WASD: moverse · Shift + W: correr · Espacio: saltar · Q: escudo · M: mapa</div>
+      <div class="reticle" aria-hidden="true"></div>
+      <section id="hover-card" class="hover-card" hidden aria-live="polite">
+        <h2 id="hover-name"></h2>
+        <p id="hover-role"></p>
+        <div class="health-track"><span id="hover-health-fill"></span></div>
+        <div class="hover-stats">
+          <span id="hover-health"></span>
+          <span id="hover-move"></span>
+        </div>
+      </section>
+      <section id="world-map" hidden role="dialog" aria-modal="true" aria-labelledby="map-title">
+        <div class="world-map-panel">
+          <header class="map-header">
+            <div>
+              <small>SANTA MARTA · MUNDO KRIKAS</small>
+              <h1 id="map-title">Mapa del mundo</h1>
+            </div>
+            <button id="close-map" type="button" aria-label="Cerrar mapa">×</button>
+          </header>
+          <div class="map-content">
+            <div class="map-art" aria-label="Mapa ilustrado de las regiones de Santa Marta">
+              <div class="map-sea"></div>
+              <div class="map-ridge"></div>
+              <div class="map-road road-one"></div>
+              <div class="map-road road-two"></div>
+              <span class="map-compass">N ↑</span>
+              <button class="map-location" data-world-location="taganga" style="left: 19%; top: 17%" type="button" aria-pressed="false">Taganga</button>
+              <button class="map-location" data-world-location="centro" style="left: 34%; top: 42%" type="button" aria-pressed="false">Centro Histórico</button>
+              <button class="map-location" data-world-location="rodadero" style="left: 43%; top: 70%" type="button" aria-pressed="false">El Rodadero</button>
+              <button class="map-location" data-world-location="gaira" style="left: 57%; top: 83%" type="button" aria-pressed="false">Gaira</button>
+              <button class="map-location" data-world-location="libano" style="left: 58%; top: 45%" type="button" aria-pressed="false">Líbano 2000</button>
+              <button class="map-location" data-world-location="mamatoco" style="left: 74%; top: 31%" type="button" aria-pressed="false">Mamatoco</button>
+              <button class="map-location" data-world-location="bonda" style="left: 77%; top: 66%" type="button" aria-pressed="false">Bonda</button>
+              <button class="map-location current" data-world-location="brumalia" style="left: 82%; top: 16%" type="button" aria-pressed="true">Bosque Brumalia</button>
+            </div>
+            <aside class="map-details">
+              <small>SECTOR SELECCIONADO</small>
+              <h2 id="map-location-title">Bosque Brumalia</h2>
+              <p id="map-location-description">Un bosque antiguo en las faldas de la Sierra, donde patrullan los arqueros enmascarados.</p>
+              <div class="map-region-list">
+                <span>Taganga · costa norte</span>
+                <span>Centro Histórico · bahía</span>
+                <span>El Rodadero · costa sur</span>
+                <span>Gaira · litoral</span>
+                <span>Líbano 2000 · colinas</span>
+                <span>Mamatoco · zona oriental</span>
+                <span>Bonda · camino a la Sierra</span>
+              </div>
+            </aside>
+          </div>
+        </div>
+      </section>
+      <section id="room-lobby" hidden role="dialog" aria-modal="true" aria-labelledby="room-title">
+        <div class="room-panel">
+          <header class="room-header">
+            <div>
+              <small>KRIKAS · COOPERATIVO</small>
+              <h2 id="room-title">Jugar en sala</h2>
+            </div>
+            <button id="close-room" class="room-close" type="button" aria-label="Cerrar sala">×</button>
+          </header>
+          <label class="room-field">Nombre del jugador<input id="room-player-name" maxlength="20" value="Krika" /></label>
+          <label class="room-field">Servidor WebSocket<input id="room-server-url" inputmode="url" /></label>
+          <div class="room-actions">
+            <button id="create-room" class="room-action" type="button">CREAR SALA</button>
+            <button id="join-room" class="room-secondary" type="button">UNIRME</button>
+          </div>
+          <label class="room-field">Código de sala<input id="room-code-input" maxlength="6" placeholder="ABC123" autocomplete="off" /></label>
+          <div id="room-status" aria-live="polite">Crea una sala y comparte el código con tus amigos.</div>
+          <section id="room-connected" hidden>
+            <div><small>CÓDIGO PARA COMPARTIR</small><div id="room-code-display"></div></div>
+            <div id="room-members"></div>
+            <div class="room-actions">
+              <button id="copy-room-code" class="room-secondary" type="button">COPIAR CÓDIGO</button>
+              <button id="leave-room" class="room-secondary" type="button">SALIR DE SALA</button>
+            </div>
+          </section>
+        </div>
+      </section>
+      <div class="controls-note">WASD: mover · Shift + W: correr · Espacio: saltar · Q: escudo · M: mapa · mouse: mirar · clic izquierdo: disparar · Esc: liberar</div>
+      <footer class="bottom-panel">
+        <div class="skills">
+          <button class="skill-button" data-skill="earth" type="button">
+            <strong>TIERRA · 1</strong><small>Impacto en area</small>
+          </button>
+          <button class="skill-button" data-skill="wind" type="button">
+            <strong>VIENTO · 2</strong><small>Dano y empuje</small>
+          </button>
+          <button class="skill-button" data-skill="water" type="button">
+            <strong>AGUA · 3</strong><small>Ralentiza y acelera</small>
+          </button>
+        </div>
+      </footer>
+      <section id="defeat-menu" hidden role="dialog" aria-modal="true" aria-labelledby="defeat-title">
+        <div class="defeat-panel">
+          <small>EL BOSQUE DE BRUMALIA</small>
+          <h1 id="defeat-title">Has caído</h1>
+          <p>Los arqueros enmascarados te han vencido.</p>
+          <button id="restart-game" type="button">VOLVER A ENTRAR</button>
+        </div>
+      </section>
+    </main>
+    <script type="module" src="./src/main.ts"></script>
+  </body>
+</html>

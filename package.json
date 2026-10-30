@@ -1,0 +1,16 @@
+{
+  "name": "krikas-mvp",
+  "version": "0.1.0",
+  "private": true,
+  "workspaces": [
+    "client",
+    "server",
+    "shared"
+  ],
+  "scripts": {
+    "dev:client": "npm --workspace client run dev",
+    "dev:server": "npm --workspace server run dev",
+    "build": "npm --workspace shared run build && npm --workspace client run build && npm --workspace server run build",
+    "start": "npm --workspace server run start"
+  }
+}
