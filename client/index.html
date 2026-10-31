@@ -52,6 +52,7 @@
       .stat-pill strong { color: #e9f1d8; }
       #wood-stock { min-width: 84px; color: #d9bd82; }
       #wood-count { color: #f2dfac; }
+      #day-night-label.night-mode { color: #c4d2ff; border-color: rgba(153, 174, 255, 0.5); }
       .turn-pill { min-width: 125px; color: #f3d89a; text-align: center; }
       #room-button {
         pointer-events: auto;
@@ -333,6 +334,40 @@
         background: rgba(8, 14, 14, 0.72);
         backdrop-filter: blur(5px);
       }
+      #start-menu {
+        position: absolute;
+        z-index: 19;
+        inset: 0;
+        display: grid;
+        place-items: center;
+        padding: 20px;
+        background: rgba(8, 14, 14, 0.66);
+        backdrop-filter: blur(4px);
+      }
+      #start-menu[hidden] { display: none; }
+      .start-panel {
+        width: min(420px, 100%);
+        padding: 32px;
+        border: 1px solid rgba(220, 202, 151, 0.48);
+        background: #111b19;
+        box-shadow: 0 24px 70px rgba(0, 0, 0, 0.55);
+        text-align: center;
+      }
+      .start-panel small { color: #c5b68f; font-size: 10px; letter-spacing: 0.16em; }
+      .start-panel h1 { margin: 10px 0 7px; color: #f0d99c; font-family: Georgia, serif; font-size: 32px; }
+      .start-panel p { margin: 0 0 22px; color: #bac6bb; font-size: 13px; line-height: 1.55; }
+      #start-game {
+        min-height: 48px;
+        min-width: 160px;
+        padding: 0 24px;
+        border: 1px solid #e1c47c;
+        background: #695b37;
+        color: #fff3d4;
+        font-weight: 800;
+        letter-spacing: 0.08em;
+        cursor: pointer;
+      }
+      #start-game:hover { background: #806b40; }
       #defeat-menu[hidden] { display: none; }
       .defeat-panel {
         width: min(390px, 100%);
@@ -457,6 +492,8 @@
         <div class="player-panel">
           <span class="player-name">Krika, Arquera</span>
           <span class="stat-pill"><strong id="player-health">PV 100 / 100</strong></span>
+          <span class="stat-pill"><strong id="player-level">NIVEL 1 · 0/2</strong></span>
+          <span id="day-night-label" class="stat-pill">DÍA · 10:00</span>
           <span id="wood-stock" class="stat-pill">MADERA · <strong id="wood-count">0</strong></span>
           <span id="player-shield" class="stat-pill shield-pill">ESCUDO · MANTENER Q</span>
           <span class="stat-pill"><strong id="enemy-count">ENEMIGOS 4</strong></span>
@@ -464,7 +501,7 @@
           <button id="room-button" type="button">SALA · SOLO</button>
         </div>
       </header>
-      <div id="turn-message">WASD: mover · E: recolectar madera · B: construir · M: mapa</div>
+      <div id="turn-message">WASD: mover · F: madera · E: linterna · B: construir · M: mapa</div>
       <div id="world-waypoint" hidden aria-live="polite"></div>
       <div class="reticle" aria-hidden="true"></div>
       <section id="hover-card" class="hover-card" hidden aria-live="polite">
@@ -548,7 +585,7 @@
           </section>
         </div>
       </section>
-      <div class="controls-note">WASD: mover · E: madera · B: construir · Shift + W: correr · M: mapa · clic: colocar</div>
+      <div class="controls-note">WASD: mover · F: madera · E: linterna · B: construir · Shift + W: correr · M: mapa · clic: colocar</div>
       <section id="build-panel" hidden aria-label="Construir">
         <header class="build-header"><span>CONSTRUIR · MADERA <span id="build-wood-value">0</span></span><button id="close-build" type="button" aria-label="Cerrar construcción">×</button></header>
         <div class="build-options">
@@ -578,6 +615,14 @@
           <h1 id="defeat-title">Has caído</h1>
           <p>Los chirretes del pando te apuñalaron</p>
           <button id="restart-game" type="button">VOLVER A ENTRAR</button>
+        </div>
+      </section>
+      <section id="start-menu" role="dialog" aria-modal="true" aria-labelledby="start-title">
+        <div class="start-panel">
+          <small>KRIKAS · SANTA MARTA</small>
+          <h1 id="start-title">¿Lista para comenzar?</h1>
+          <p>Los enemigos esperan. Cuando estés preparada, inicia la aventura y explora los barrios.</p>
+          <button id="start-game" type="button">INICIAR</button>
         </div>
       </section>
     </main>

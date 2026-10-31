@@ -15,7 +15,7 @@ const ENEMY_STEP_DURATION = 0.54;
 const COVER_STEP_DURATION = 0.42;
 const ARROW_RANGE = 100;
 type SkillId = 'earth' | 'wind' | 'water';
-type Phase = 'combat' | 'victory' | 'defeat';
+type Phase = 'ready' | 'combat' | 'victory' | 'defeat';
 type WorldLocationId = 'taganga' | 'centro' | 'rodadero' | 'gaira' | 'libano' | 'mamatoco' | 'bonda' | 'brumalia';
 type BuildingKind = 'floor' | 'wall' | 'house' | 'campfire';
 type BuildingRecord = { id: string; kind: BuildingKind; cell: Cell };
@@ -60,7 +60,7 @@ function buildWorldObstacles(): Array<[number, number]> {
 }
 
 const OBSTACLES = buildWorldObstacles();
-type EnemyModel = 'archer' | 'crab';
+type EnemyModel = 'archer' | 'crab' | 'shadow' | 'wraith';
 type LandmarkKind = 'palm' | 'rocks' | 'flowers' | 'market' | 'lantern' | 'bench' | 'reeds' | 'fallen-log' | 'mushrooms' | 'umbrella' | 'crates' | 'sign' | 'ruins' | 'bush';
 type EnemyDefinition = { id: string; name: string; cell: Cell; hp: number; color: number; model: EnemyModel };
 type WorldEncounter = {
@@ -135,7 +135,7 @@ const WORLD_ENCOUNTERS: Record<WorldLocationId, WorldEncounter> = {
       { id: 'libano-alley-scout', name: 'Vigía del callejón', cell: { x: 8, y: 2 }, hp: 78, color: 0x607a4c, model: 'archer' },
       { id: 'libano-hill-raider', name: 'Bandido de la ladera', cell: { x: 9, y: 2 }, hp: 88, color: 0x8c4f43, model: 'archer' },
       { id: 'libano-stair-guard', name: 'Guardián de las escaleras', cell: { x: 9, y: 3 }, hp: 82, color: 0x536e7e, model: 'archer' },
-      { id: 'libano-lookout', name: 'Explorador del mirador', cell: { x: 5, y: 9 }, hp: 92, color: 0x80633f, model: 'archer' },
+      { id: 'libano-lookout', name: 'Explorador del mirador', cell: { x: 5, y: 9 }, hp: 92, color: 0x80633f, model: 'shadow' },
     ],
   },
   mamatoco: {
@@ -153,7 +153,7 @@ const WORLD_ENCOUNTERS: Record<WorldLocationId, WorldEncounter> = {
       { id: 'bonda-river-crab', name: 'Cangrejo del río Bonda', cell: { x: 8, y: 2 }, hp: 78, color: 0xc46e45, model: 'crab' },
       { id: 'bonda-river-guard', name: 'Guardián ribereño', cell: { x: 9, y: 2 }, hp: 88, color: 0x536e7e, model: 'archer' },
       { id: 'bonda-bank-crab', name: 'Cangrejo de la orilla', cell: { x: 9, y: 3 }, hp: 82, color: 0xd29350, model: 'crab' },
-      { id: 'bonda-trail-raider', name: 'Saqueador del camino', cell: { x: 5, y: 9 }, hp: 92, color: 0x8c4f43, model: 'archer' },
+      { id: 'bonda-trail-raider', name: 'Saqueador del camino', cell: { x: 5, y: 9 }, hp: 92, color: 0x8c4f43, model: 'wraith' },
     ],
   },
   brumalia: {
@@ -163,6 +163,8 @@ const WORLD_ENCOUNTERS: Record<WorldLocationId, WorldEncounter> = {
       { id: 'thornling', name: 'Espinajo', cell: { x: 9, y: 2 }, hp: 82, color: 0x8c4f43, model: 'archer' },
       { id: 'mireling', name: 'Lodoso', cell: { x: 9, y: 3 }, hp: 78, color: 0x536e7e, model: 'archer' },
       { id: 'wildling', name: 'Silvestre', cell: { x: 5, y: 9 }, hp: 90, color: 0x80633f, model: 'archer' },
+      { id: 'shadow-stalker', name: 'Acechador de sombra', cell: { x: 5, y: 5 }, hp: 108, color: 0x382c4f, model: 'shadow' },
+      { id: 'sierra-wraith', name: 'Aparición de la Sierra', cell: { x: 3, y: 7 }, hp: 126, color: 0x7d91a0, model: 'wraith' },
     ],
   },
 };
@@ -219,6 +221,7 @@ type HealingTileState = {
   group: THREE.Group;
   glowMaterial: THREE.MeshBasicMaterial;
 };
+type LevelTileState = { cell: Cell; group: THREE.Group; phase: number };
 
 type NetworkPlayer = { id: string; name: string; x: number; z: number; yaw: number; hp: number; wood: number; shielding: boolean };
 type RemotePlayer = { group: THREE.Group; target: THREE.Vector3; yaw: number };
@@ -250,6 +253,8 @@ export class RealtimeGame {
     new THREE.PlaneGeometry(GRID_WIDTH * CELL_SIZE + 12, GRID_HEIGHT * CELL_SIZE + 12),
     new THREE.MeshStandardMaterial({ color: 0x304f3e, roughness: 1 }),
   );
+  private readonly worldAmbientLight = new THREE.HemisphereLight(0xe4f0dc, 0x344433, 2.1);
+  private readonly worldSunlight = new THREE.DirectionalLight(0xffe6b6, 2.5);
   private readonly treeTrunkGeometry = new THREE.CylinderGeometry(0.2, 0.38, 3.1, 9, 3);
   private readonly treeRootGeometry = new THREE.CylinderGeometry(0.36, 0.52, 0.52, 8);
   private readonly treeBranchGeometry = new THREE.CylinderGeometry(0.035, 0.13, 1.35, 7);
@@ -289,6 +294,7 @@ export class RealtimeGame {
   private readonly landmarkGlowMaterial = new THREE.MeshStandardMaterial({ color: 0xffd37a, emissive: 0xe59a3a, emissiveIntensity: 1.5 });
   private readonly tiles: Array<{ cell: Cell; baseColor: THREE.Color }> = [];
   private readonly healingTiles: HealingTileState[] = [];
+  private readonly levelTiles: LevelTileState[] = [];
   private occupiedHealingTile: string | null = null;
   private terrainMesh!: THREE.InstancedMesh;
   private playerBowVisual!: THREE.Group;
@@ -310,10 +316,12 @@ export class RealtimeGame {
   private readonly playerCell: Cell = { ...WORLD_CENTERS.brumalia };
   private destinationLocation: WorldLocationId | null = null;
   private playerHp = 100;
-  private readonly playerMaxHp = 100;
+  private playerMaxHp = 100;
+  private playerLevel = 1;
+  private levelTileProgress = 0;
   private playerSpeedBoost = 0;
   private bowCooldown = 0;
-  private phase: Phase = 'combat';
+  private phase: Phase = 'ready';
   private selectedSkill: SkillId | null = null;
   private notice = '';
   private yaw = 0;
@@ -333,6 +341,11 @@ export class RealtimeGame {
   private isGrounded = true;
   private verticalVelocity = 0;
   private readonly shieldVisual: THREE.Group;
+  private readonly flashlightVisual = new THREE.Group();
+  private readonly flashlightSpot = new THREE.SpotLight(0xffe4a6, 5.2, 30, 0.42, 0.58, 1.45);
+  private flashlightOn = false;
+  private worldCycleElapsed = 0;
+  private nightBlend = 0;
   private animationFrame = 0;
   private previousFrameTime = 0;
 
@@ -343,11 +356,14 @@ export class RealtimeGame {
   private readonly hoverMove: HTMLElement;
   private readonly hoverHealthFill: HTMLElement;
   private readonly healthLabel: HTMLElement;
+  private readonly levelLabel: HTMLElement;
   private readonly shieldLabel: HTMLElement;
   private readonly enemyCountLabel: HTMLElement;
   private readonly turnIndicator: HTMLElement;
+  private readonly dayNightLabel: HTMLElement;
   private readonly turnMessage: HTMLElement;
   private readonly defeatMenu: HTMLElement;
+  private readonly startMenu: HTMLElement;
   private readonly skillButtons = new Map<SkillId, HTMLButtonElement>();
   private readonly mapLocationButtons = new Map<WorldLocationId, HTMLButtonElement>();
   private readonly remotePlayers = new Map<string, RemotePlayer>();
@@ -362,12 +378,14 @@ export class RealtimeGame {
   private readonly roomCodeDisplay: HTMLElement;
   private readonly roomMembers: HTMLElement;
   private readonly roomButton: HTMLButtonElement;
+  private audioContext: AudioContext | null = null;
+  private shieldFlashTimer = 0;
   private readonly woodLabel: HTMLElement;
   private readonly buildWoodValue: HTMLElement;
   private readonly buildPanel: HTMLElement;
   private readonly buildButtons = new Map<BuildingKind, HTMLButtonElement>();
   private readonly builtStructures: BuildingInstance[] = [];
-  private buildPreview!: THREE.Mesh;
+  private buildPreview!: THREE.Group;
   private selectedBuilding: BuildingKind | null = null;
   private woodCount = 0;
 
@@ -386,11 +404,14 @@ export class RealtimeGame {
     this.hoverMove = this.getElement('#hover-move');
     this.hoverHealthFill = this.getElement('#hover-health-fill');
     this.healthLabel = this.getElement('#player-health');
+    this.levelLabel = this.getElement('#player-level');
     this.shieldLabel = this.getElement('#player-shield');
     this.enemyCountLabel = this.getElement('#enemy-count');
     this.turnIndicator = this.getElement('#turn-indicator');
+    this.dayNightLabel = this.getElement('#day-night-label');
     this.turnMessage = this.getElement('#turn-message');
     this.defeatMenu = this.getElement('#defeat-menu');
+    this.startMenu = this.getElement('#start-menu');
     this.roomLobby = this.getElement('#room-lobby');
     this.roomStatus = this.getElement('#room-status');
     this.roomConnected = this.getElement('#room-connected');
@@ -419,10 +440,12 @@ export class RealtimeGame {
     this.camera.add(this.shieldVisual);
     this.scene.add(this.camera);
     this.createBow();
+    this.createFlashlight();
     this.createBuildPreview();
     this.configureCamera();
     this.bindControls();
     this.resize();
+    this.setNotice('Pulsa INICIAR cuando estés listo. Los enemigos están en pausa.');
     this.updateHud();
     window.addEventListener('resize', this.resize);
     this.animationFrame = requestAnimationFrame(this.animate);
@@ -432,11 +455,9 @@ export class RealtimeGame {
     const encounter = WORLD_ENCOUNTERS[this.currentLocation];
     this.scene.background = new THREE.Color(encounter.background);
     this.scene.fog = new THREE.Fog(encounter.background, 30, 64);
-    this.scene.add(new THREE.HemisphereLight(0xe4f0dc, 0x344433, 2.1));
-
-    const sunlight = new THREE.DirectionalLight(0xffe6b6, 2.5);
-    sunlight.position.set(-8, 18, -10);
-    this.scene.add(sunlight);
+    this.scene.add(this.worldAmbientLight);
+    this.worldSunlight.position.set(-8, 18, -10);
+    this.scene.add(this.worldSunlight);
 
     this.ground.rotation.x = -Math.PI / 2;
     this.ground.position.y = -0.08;
@@ -493,6 +514,7 @@ export class RealtimeGame {
     });
     this.createLandmarks();
     this.createHealingTiles();
+    this.createLevelTiles();
     this.createForestEdge();
   }
 
@@ -509,12 +531,31 @@ export class RealtimeGame {
   }
 
   private createBuildPreview(): void {
-    this.buildPreview = new THREE.Mesh(
-      new THREE.BoxGeometry(CELL_SIZE * 0.94, 0.06, CELL_SIZE * 0.94),
-      new THREE.MeshBasicMaterial({ color: 0x65e6a5, transparent: true, opacity: 0.42 }),
-    );
+    this.buildPreview = new THREE.Group();
     this.buildPreview.visible = false;
     this.scene.add(this.buildPreview);
+  }
+
+  private setBuildPreviewKind(kind: BuildingKind): void {
+    this.buildPreview.traverse((object) => {
+      if (!(object instanceof THREE.Mesh)) return;
+      const materials = Array.isArray(object.material) ? object.material : [object.material];
+      materials.forEach((material) => material.dispose());
+    });
+    this.buildPreview.clear();
+    const model = this.createBuildingModel(kind);
+    model.traverse((object) => {
+      if (!(object instanceof THREE.Mesh)) return;
+      const material = new THREE.MeshBasicMaterial({
+        color: 0x65e6a5,
+        transparent: true,
+        opacity: 0.48,
+        depthWrite: false,
+      });
+      object.material = material;
+      object.renderOrder = 3;
+    });
+    this.buildPreview.add(model);
   }
 
   private setTreeHarvestPending(treeId: string, pending: boolean): void {
@@ -567,6 +608,7 @@ export class RealtimeGame {
     }
 
     this.woodCount += 3;
+    this.playSound('collect');
     this.applyHarvestedTree(treeId);
     this.setNotice('Recolectaste 3 bloques de madera.');
     this.updateHud();
@@ -596,10 +638,20 @@ export class RealtimeGame {
       return;
     }
     this.selectedBuilding = kind;
+    this.setBuildPreviewKind(kind);
     this.buildPanel.hidden = true;
     this.root.classList.add('build-mode');
     this.setNotice(`${BUILDING_NAME[kind]} seleccionada. Apunta a una casilla cercana y haz clic para colocarla. Pulsa B para cancelar.`);
     this.updateHud();
+    if (!this.pointerLocked && !this.nativePointerLock) {
+      this.lockingMouse = true;
+      try {
+        Promise.resolve(this.renderer.domElement.requestPointerLock())
+          .catch(() => this.enterFallbackCapture());
+      } catch {
+        this.enterFallbackCapture();
+      }
+    }
   }
 
   private updateBuildingPreview(): void {
@@ -613,10 +665,13 @@ export class RealtimeGame {
       return;
     }
     const position = this.cellToWorld(cell);
-    this.buildPreview.position.set(position.x, 0.18, position.z);
-    const material = this.buildPreview.material as THREE.MeshBasicMaterial;
+    this.buildPreview.position.set(position.x, 0, position.z);
     const buildable = this.canBuildAtCell(cell, this.selectedBuilding);
-    material.color.setHex(buildable ? 0x65e6a5 : 0xef786b);
+    this.buildPreview.traverse((object) => {
+      if (!(object instanceof THREE.Mesh)) return;
+      const material = object.material as THREE.MeshBasicMaterial;
+      material.color.setHex(buildable ? 0x65e6a5 : 0xef786b);
+    });
     this.buildPreview.visible = true;
   }
 
@@ -652,6 +707,7 @@ export class RealtimeGame {
 
     this.woodCount -= cost;
     this.addBuilding({ id: `local-${Date.now()}-${Math.floor(Math.random() * 100000)}`, kind, cell });
+    this.playSound('build');
     this.setNotice(`${BUILDING_NAME[kind]} construida por ${cost} bloques de madera.`);
     this.updateHud();
     if (this.woodCount < cost) {
@@ -697,6 +753,7 @@ export class RealtimeGame {
       addBox([0, 1.03, 0.87], [0.72, 1.72, 0.2], this.landmarkDarkWoodMaterial);
       addBox([-0.58, 2.03, 0], [1.25, 0.18, 2.4], this.landmarkFabricMaterials[1], -0.53);
       addBox([0.58, 2.03, 0], [1.25, 0.18, 2.4], this.landmarkFabricMaterials[1], 0.53);
+      addBox([0, 2.58, 0], [2.35, 0.16, 2.52], this.landmarkDarkWoodMaterial);
     } else {
       for (let stone = 0; stone < 7; stone++) {
         const angle = (stone / 7) * Math.PI * 2;
@@ -711,6 +768,12 @@ export class RealtimeGame {
       flame.position.y = 0.5;
       flame.scale.set(0.68, 1.25, 0.68);
       group.add(flame);
+      const glow = new THREE.Mesh(
+        new THREE.CylinderGeometry(0.7, 0.85, 0.08, 16),
+        this.landmarkGlowMaterial,
+      );
+      glow.position.y = 0.08;
+      group.add(glow);
     }
     return group;
   }
@@ -886,6 +949,7 @@ export class RealtimeGame {
     const position = this.cellToWorld(cell);
     group.position.set(position.x, 0, position.z);
     group.rotation.y = random * 0.57;
+    group.userData.cell = { ...cell };
     group.userData.worldLocation = location;
     group.userData.landmark = kind;
     this.landmarkProps.push(group);
@@ -971,12 +1035,98 @@ export class RealtimeGame {
 
     const restored = Math.min(35, this.playerMaxHp - this.playerHp);
     this.playerHp += restored;
+    this.playSound('heal');
     const position = this.cellToWorld(tile.cell);
     position.y = 1.2;
     this.playRing(position, 0x70f0ae);
     this.playFloatLabel(position.clone().add(new THREE.Vector3(0, 0.5, 0)), `+${restored} PV`, 0x70f0ae);
     this.relocateHealingTile(tile);
     this.setNotice(`Recuperaste ${restored} PV. La casilla verde apareció en otro punto del mapa.`);
+    this.updateHud();
+  }
+
+  private createLevelTiles(): void {
+    for (let index = 0; index < 18; index++) {
+      const cell = this.randomLevelTileCell();
+      if (!cell) break;
+      const group = this.createLevelTileModel();
+      const position = this.cellToWorld(cell);
+      group.position.set(position.x, 0, position.z);
+      this.scene.add(group);
+      this.levelTiles.push({ cell, group, phase: Math.random() * Math.PI * 2 });
+    }
+  }
+
+  private createLevelTileModel(): THREE.Group {
+    const group = new THREE.Group();
+    const base = new THREE.Mesh(
+      new THREE.CylinderGeometry(0.55, 0.66, 0.12, 20),
+      new THREE.MeshStandardMaterial({ color: 0x78551f, roughness: 0.72, metalness: 0.18 }),
+    );
+    base.position.y = 0.1;
+    group.add(base);
+    const ring = new THREE.Mesh(
+      new THREE.TorusGeometry(0.48, 0.045, 8, 28),
+      new THREE.MeshBasicMaterial({ color: 0xffd36a, transparent: true, opacity: 0.9 }),
+    );
+    ring.rotation.x = Math.PI / 2;
+    ring.position.y = 0.19;
+    ring.name = 'level-tile-ring';
+    group.add(ring);
+    const crystal = new THREE.Mesh(
+      new THREE.OctahedronGeometry(0.3, 0),
+      new THREE.MeshStandardMaterial({ color: 0xffe49a, emissive: 0xd88c22, emissiveIntensity: 1.15, roughness: 0.3, metalness: 0.12 }),
+    );
+    crystal.position.y = 0.72;
+    crystal.name = 'level-tile-crystal';
+    group.add(crystal);
+    return group;
+  }
+
+  private randomLevelTileCell(ignore?: LevelTileState): Cell | null {
+    for (let attempt = 0; attempt < 1800; attempt++) {
+      const cell = { x: 2 + Math.floor(Math.random() * (GRID_WIDTH - 4)), y: 2 + Math.floor(Math.random() * (GRID_HEIGHT - 4)) };
+      if (!this.grid.isWalkable(cell.x, cell.y)) continue;
+      if (Math.hypot(cell.x - this.playerCell.x, cell.y - this.playerCell.y) < 8) continue;
+      if (this.levelTiles.some((tile) => tile !== ignore && Math.hypot(cell.x - tile.cell.x, cell.y - tile.cell.y) < 5)) continue;
+      if (this.healingTiles.some((tile) => Math.hypot(cell.x - tile.cell.x, cell.y - tile.cell.y) < 3)) continue;
+      if (this.landmarkProps.some((prop) => {
+        const landmarkCell = prop.userData.cell as Cell | undefined;
+        return landmarkCell && Math.hypot(cell.x - landmarkCell.x, cell.y - landmarkCell.y) < 2.5;
+      })) continue;
+      if (this.enemies.some((enemy) => Math.hypot(cell.x - enemy.cell.x, cell.y - enemy.cell.y) < 4)) continue;
+      if (this.builtStructures.some((building) => Math.hypot(cell.x - building.cell.x, cell.y - building.cell.y) < 2)) continue;
+      return cell;
+    }
+    return null;
+  }
+
+  private checkLevelTile(cell: Cell): void {
+    const tile = this.levelTiles.find((candidate) => candidate.cell.x === cell.x && candidate.cell.y === cell.y);
+    if (!tile) return;
+    this.levelTileProgress++;
+    this.playSound('collect');
+    const position = this.cellToWorld(tile.cell);
+    position.y = 1.35;
+    this.playFloatLabel(position, '+1 EXPERIENCIA', 0xffdc82);
+    const requirement = this.playerLevel + 1;
+    if (this.levelTileProgress >= requirement) {
+      this.playerLevel++;
+      this.levelTileProgress = 0;
+      this.playerMaxHp += 12;
+      this.playerHp = Math.min(this.playerMaxHp, this.playerHp + 20);
+      this.playSound('level-up');
+      this.playFloatLabel(position.clone().add(new THREE.Vector3(0, 0.55, 0)), `NIVEL ${this.playerLevel}`, 0xffd36a);
+      this.setNotice(`¡Subiste al nivel ${this.playerLevel}! Aumentaron tu salud máxima y tu poder.`);
+    } else {
+      this.setNotice(`Experiencia ${this.levelTileProgress}/${requirement}. Encuentra otra casilla dorada.`);
+    }
+    const nextCell = this.randomLevelTileCell(tile);
+    if (nextCell) {
+      tile.cell = nextCell;
+      const nextPosition = this.cellToWorld(nextCell);
+      tile.group.position.set(nextPosition.x, 0, nextPosition.z);
+    }
     this.updateHud();
   }
 
@@ -1112,7 +1262,9 @@ export class RealtimeGame {
         const variant = locationIndex * 4 + index;
         const group = definition.model === 'crab'
           ? this.createCrab(definition.color, variant)
-          : this.createMaskedArcher(definition.color, variant);
+          : definition.model === 'shadow' || definition.model === 'wraith'
+            ? this.createDarkArcher(definition.color, variant, definition.model)
+            : this.createMaskedArcher(definition.color, variant);
         const position = this.cellToWorld(cell);
         group.position.set(position.x, 0, position.z);
         group.userData.enemyId = definition.id;
@@ -1393,6 +1545,59 @@ export class RealtimeGame {
     return archer;
   }
 
+  private createDarkArcher(color: number, variant: number, model: 'shadow' | 'wraith'): THREE.Group {
+    const archer = this.createMaskedArcher(color, variant + 17);
+    const changed = new Set<THREE.Material>();
+    archer.traverse((object) => {
+      if (!(object instanceof THREE.Mesh)) return;
+      const materials = Array.isArray(object.material) ? object.material : [object.material];
+      materials.forEach((material) => {
+        if (changed.has(material)) return;
+        changed.add(material);
+        if (!(material instanceof THREE.MeshStandardMaterial)) return;
+        if (material.emissiveIntensity > 1) {
+          material.color.setHex(model === 'shadow' ? 0xff6747 : 0x9cf4ff);
+          material.emissive.setHex(model === 'shadow' ? 0xd52d18 : 0x38cdeb);
+          material.emissiveIntensity = model === 'shadow' ? 2.8 : 3.2;
+          return;
+        }
+        if (model === 'shadow') {
+          material.color.multiplyScalar(0.28);
+          material.roughness = Math.min(material.roughness, 0.62);
+        } else {
+          material.color.setHex(0x8293a5);
+          material.transparent = true;
+          material.opacity = 0.76;
+          material.depthWrite = false;
+          material.emissive.setHex(0x162b3b);
+          material.emissiveIntensity = 0.38;
+        }
+      });
+    });
+
+    if (model === 'shadow') {
+      const clawMaterial = new THREE.MeshStandardMaterial({ color: 0x18131f, roughness: 0.45, metalness: 0.2 });
+      for (const side of [-1, 1]) {
+        const claw = new THREE.Mesh(new THREE.ConeGeometry(0.09, 0.38, 5), clawMaterial);
+        claw.position.set(side * 0.57, 0.72, 0.26);
+        claw.rotation.z = side * -0.45;
+        claw.rotation.x = Math.PI;
+        archer.add(claw);
+      }
+    } else {
+      const wispMaterial = new THREE.MeshStandardMaterial({ color: 0x72859a, transparent: true, opacity: 0.56, emissive: 0x315d76, emissiveIntensity: 0.72, depthWrite: false });
+      for (let index = 0; index < 3; index++) {
+        const wisp = new THREE.Mesh(new THREE.ConeGeometry(0.2 + index * 0.025, 0.78 + index * 0.12, 7), wispMaterial);
+        wisp.position.set((index - 1) * 0.2, 0.48 + index * 0.08, -0.24);
+        wisp.rotation.z = (index - 1) * 0.28;
+        wisp.name = 'wraith-trail';
+        archer.add(wisp);
+      }
+    }
+    archer.userData.enemyClass = model;
+    return archer;
+  }
+
   private createBow(): void {
     const bow = new THREE.Group();
     bow.name = 'player-bow';
@@ -1427,22 +1632,131 @@ export class RealtimeGame {
     this.camera.add(bow);
   }
 
+  private createFlashlight(): void {
+    this.flashlightVisual.position.set(0.43, -0.38, -0.78);
+    this.flashlightVisual.rotation.x = -0.12;
+    const wood = new THREE.MeshStandardMaterial({ color: 0x493522, roughness: 0.9 });
+    const brass = new THREE.MeshStandardMaterial({ color: 0xa97935, metalness: 0.68, roughness: 0.42 });
+    const glass = new THREE.MeshStandardMaterial({ color: 0xffe5a0, emissive: 0xffb947, emissiveIntensity: 1.8, roughness: 0.25 });
+    const handle = new THREE.Mesh(new THREE.CylinderGeometry(0.075, 0.09, 0.3, 9), wood);
+    handle.rotation.x = Math.PI / 2;
+    handle.position.z = 0.08;
+    this.flashlightVisual.add(handle);
+    const lanternBody = new THREE.Mesh(new THREE.CylinderGeometry(0.13, 0.13, 0.28, 8, 1, true), brass);
+    lanternBody.rotation.x = Math.PI / 2;
+    lanternBody.position.z = -0.12;
+    this.flashlightVisual.add(lanternBody);
+    for (const z of [-0.27, 0.03]) {
+      const ring = new THREE.Mesh(new THREE.TorusGeometry(0.13, 0.018, 6, 12), brass);
+      ring.rotation.x = Math.PI / 2;
+      ring.position.z = z;
+      this.flashlightVisual.add(ring);
+    }
+    const lens = new THREE.Mesh(new THREE.CircleGeometry(0.105, 12), glass);
+    lens.position.z = -0.285;
+    this.flashlightVisual.add(lens);
+    this.flashlightVisual.visible = false;
+    this.camera.add(this.flashlightVisual);
+    this.flashlightSpot.position.set(0.43, -0.36, -0.74);
+    this.flashlightSpot.target.position.set(0.43, -0.42, -18);
+    this.flashlightSpot.visible = false;
+    this.camera.add(this.flashlightSpot, this.flashlightSpot.target);
+  }
+
+  private updateDayNight(delta: number): void {
+    if (this.phase !== 'ready') this.worldCycleElapsed = (this.worldCycleElapsed + delta) % 1200;
+    const phase = this.worldCycleElapsed;
+    const smooth = (value: number): number => {
+      const clamped = THREE.MathUtils.clamp(value, 0, 1);
+      return clamped * clamped * (3 - 2 * clamped);
+    };
+    if (phase < 590) this.nightBlend = 0;
+    else if (phase < 610) this.nightBlend = smooth((phase - 590) / 20);
+    else if (phase < 1180) this.nightBlend = 1;
+    else this.nightBlend = 1 - smooth((phase - 1180) / 20);
+
+    const encounter = WORLD_ENCOUNTERS[this.currentLocation];
+    const dayColor = new THREE.Color(encounter.background);
+    const nightColor = dayColor.clone().lerp(new THREE.Color(0x10172b), 0.82);
+    const skyColor = dayColor.lerp(nightColor, this.nightBlend);
+    this.scene.background = skyColor;
+    if (this.scene.fog instanceof THREE.Fog) {
+      this.scene.fog.color.copy(skyColor);
+      this.scene.fog.near = THREE.MathUtils.lerp(30, 15, this.nightBlend);
+      this.scene.fog.far = THREE.MathUtils.lerp(64, 42, this.nightBlend);
+    }
+    this.worldAmbientLight.intensity = THREE.MathUtils.lerp(2.1, 0.42, this.nightBlend);
+    this.worldAmbientLight.color.setHex(this.nightBlend > 0.35 ? 0x8ea8d7 : 0xe4f0dc);
+    this.worldAmbientLight.groundColor.setHex(this.nightBlend > 0.35 ? 0x172033 : 0x344433);
+    this.worldSunlight.intensity = THREE.MathUtils.lerp(2.5, 0.12, this.nightBlend);
+    this.worldSunlight.color.setHex(this.nightBlend > 0.35 ? 0x8394cf : 0xffe6b6);
+
+    const isNight = phase >= 600;
+    const seconds = isNight ? 1200 - phase : 600 - phase;
+    const remaining = Math.max(0, Math.ceil(seconds));
+    const minutesText = `${Math.floor(remaining / 60).toString().padStart(2, '0')}:${(remaining % 60).toString().padStart(2, '0')}`;
+    this.dayNightLabel.textContent = `${isNight ? 'NOCHE' : 'DÍA'} · ${minutesText}`;
+    this.dayNightLabel.classList.toggle('night-mode', isNight);
+  }
+
+  private toggleFlashlight(): void {
+    this.flashlightOn = !this.flashlightOn;
+    this.flashlightSpot.visible = this.flashlightOn;
+    this.flashlightVisual.visible = this.flashlightOn;
+    this.playSound('flashlight');
+    this.setNotice(this.flashlightOn ? 'Linterna encendida.' : 'Linterna apagada.');
+  }
+
   private createShieldVisual(): THREE.Group {
     const shield = new THREE.Group();
+    shield.name = 'wooden-buckler';
+    const outline = new THREE.Shape();
+    outline.moveTo(-0.36, 0.32);
+    outline.quadraticCurveTo(-0.42, 0.5, -0.22, 0.52);
+    outline.quadraticCurveTo(0, 0.57, 0.22, 0.52);
+    outline.quadraticCurveTo(0.42, 0.5, 0.36, 0.32);
+    outline.lineTo(0.28, -0.18);
+    outline.quadraticCurveTo(0.2, -0.44, 0, -0.58);
+    outline.quadraticCurveTo(-0.2, -0.44, -0.28, -0.18);
+    outline.closePath();
     const face = new THREE.Mesh(
-      new THREE.CircleGeometry(0.46, 6),
-      new THREE.MeshBasicMaterial({ color: 0x6ee5e4, transparent: true, opacity: 0.22, side: THREE.DoubleSide }),
+      new THREE.ExtrudeGeometry(outline, { depth: 0.075, bevelEnabled: true, bevelSegments: 2, steps: 1, bevelSize: 0.025, bevelThickness: 0.025 }),
+      new THREE.MeshStandardMaterial({ color: 0x75502e, roughness: 0.88, metalness: 0.04 }),
     );
-    face.position.z = -1.08;
+    face.name = 'shield-face';
     shield.add(face);
-
+    const planks = new THREE.Group();
+    const plankMaterial = new THREE.MeshStandardMaterial({ color: 0x9b6b3c, roughness: 0.92 });
+    for (let index = -1; index <= 1; index++) {
+      const plank = new THREE.Mesh(new THREE.BoxGeometry(0.17, 0.72, 0.035), plankMaterial);
+      plank.position.set(index * 0.18, -0.015, 0.075);
+      plank.rotation.z = index * -0.045;
+      planks.add(plank);
+    }
+    shield.add(planks);
+    const rimPoints = outline.getPoints(28).map((point) => new THREE.Vector3(point.x, point.y, 0.09));
     const rim = new THREE.Mesh(
-      new THREE.RingGeometry(0.43, 0.49, 6),
-      new THREE.MeshBasicMaterial({ color: 0xb4ffff, transparent: true, opacity: 0.9, side: THREE.DoubleSide }),
+      new THREE.TubeGeometry(new THREE.CatmullRomCurve3(rimPoints, true), 48, 0.025, 6, true),
+      new THREE.MeshStandardMaterial({ color: 0x80633f, roughness: 0.65, metalness: 0.38 }),
     );
-    rim.position.z = -1.065;
+    rim.name = 'shield-rim';
     shield.add(rim);
-    shield.position.set(-0.49, -0.02, 0);
+    const boss = new THREE.Mesh(new THREE.SphereGeometry(0.105, 12, 8), new THREE.MeshStandardMaterial({ color: 0x8c8170, roughness: 0.48, metalness: 0.65 }));
+    boss.name = 'shield-boss';
+    boss.position.set(0, 0, 0.135);
+    boss.scale.set(1, 1, 0.42);
+    shield.add(boss);
+    const straps = new THREE.Mesh(new THREE.BoxGeometry(0.5, 0.07, 0.04), new THREE.MeshStandardMaterial({ color: 0x493323, roughness: 0.95 }));
+    straps.position.set(0, -0.28, 0.11);
+    shield.add(straps);
+    for (const x of [-0.27, 0.27]) {
+      const rivet = new THREE.Mesh(new THREE.SphereGeometry(0.025, 8, 6), new THREE.MeshStandardMaterial({ color: 0xb5a17d, metalness: 0.72, roughness: 0.5 }));
+      rivet.position.set(x, -0.28, 0.14);
+      shield.add(rivet);
+    }
+    shield.position.set(-0.48, -0.18, -0.92);
+    shield.rotation.set(0.04, -0.08, -0.12);
+    shield.scale.setScalar(0.9);
     shield.visible = false;
     return shield;
   }
@@ -1496,6 +1810,7 @@ export class RealtimeGame {
     const serverUrl = this.getElement<HTMLInputElement>('#room-server-url');
     serverUrl.value = `${location.protocol === 'https:' ? 'wss' : 'ws'}://${location.hostname || 'localhost'}:8080`;
     this.getElement<HTMLButtonElement>('#restart-game').addEventListener('click', () => window.location.reload());
+    this.getElement<HTMLButtonElement>('#start-game').addEventListener('click', () => this.startGame());
     window.addEventListener('keydown', this.onKeyDown);
     window.addEventListener('keyup', this.onKeyUp);
   }
@@ -1571,8 +1886,9 @@ export class RealtimeGame {
         this.applyHealingTileMove(message.tileId, message.cell, true);
       } else if (message.type === 'wood-collected' || message.type === 'tree-harvested') {
         this.applyHarvestedTree(message.treeId);
-        if (message.playerId === this.localPlayerId && Number.isFinite(message.wood)) {
+        if (message.type === 'wood-collected' && message.playerId === this.localPlayerId && Number.isFinite(message.wood)) {
           this.woodCount = Number(message.wood);
+          this.playSound('collect');
           this.updateHud();
         }
       } else if (message.type === 'wood-harvest-denied') {
@@ -1582,6 +1898,7 @@ export class RealtimeGame {
         if (message.building && typeof message.building === 'object') this.addBuilding(message.building as BuildingRecord);
         if (message.builderId === this.localPlayerId && Number.isFinite(message.wood)) {
           this.woodCount = Number(message.wood);
+          this.playSound('build');
           const kind = message.building && typeof message.building === 'object'
             ? (message.building as BuildingRecord).kind
             : null;
@@ -1674,6 +1991,7 @@ export class RealtimeGame {
   }
 
   private readonly onPointerDown = (event: PointerEvent): void => {
+    if (this.phase === 'ready') return;
     if (event.button === 2) {
       event.preventDefault();
       this.aiming = true;
@@ -1692,6 +2010,7 @@ export class RealtimeGame {
   };
 
   private readonly onMouseDown = (event: MouseEvent): void => {
+    if (this.phase === 'ready') return;
     if (event.button !== 0) return;
     if (!this.pointerLocked) {
       if (this.selectedBuilding) {
@@ -1798,6 +2117,10 @@ export class RealtimeGame {
   private readonly onContextMenu = (event: MouseEvent): void => event.preventDefault();
 
   private readonly onKeyDown = (event: KeyboardEvent): void => {
+    if (this.phase === 'ready') {
+      if (event.code === 'Enter') this.startGame();
+      return;
+    }
     if (event.code === 'Escape' && this.selectedBuilding) {
       this.selectedBuilding = null;
       this.root.classList.remove('build-mode');
@@ -1822,8 +2145,12 @@ export class RealtimeGame {
       if (!event.repeat) this.toggleBuildPanel();
       return;
     }
-    if (event.code === 'KeyE') {
+    if (event.code === 'KeyF') {
       if (!event.repeat) this.collectNearbyWood();
+      return;
+    }
+    if (event.code === 'KeyE') {
+      if (!event.repeat) this.toggleFlashlight();
       return;
     }
     if (event.code === 'KeyP') {
@@ -1917,7 +2244,7 @@ export class RealtimeGame {
     this.scene.background = new THREE.Color(encounter.background);
     if (this.scene.fog instanceof THREE.Fog) this.scene.fog.color.setHex(encounter.background);
     (this.ground.material as THREE.MeshStandardMaterial).color.setHex(encounter.ground);
-    if (this.phase !== 'defeat') this.phase = this.hasLivingEnemies() ? 'combat' : 'victory';
+    if (this.phase !== 'defeat' && this.phase !== 'ready') this.phase = this.hasLivingEnemies() ? 'combat' : 'victory';
     this.destinationLocation = this.destinationLocation === location ? null : this.destinationLocation;
 
     this.mapLocationButtons.forEach((button, id) => {
@@ -2011,6 +2338,7 @@ export class RealtimeGame {
 
     this.skillStates[skill].cooldown = skill === 'earth' ? 4.5 : 3.5;
     this.selectedSkill = null;
+    this.playSound(skill);
 
     if (skill === 'earth') {
       const affected = this.enemies.filter((candidate) =>
@@ -2048,6 +2376,7 @@ export class RealtimeGame {
       return;
     }
     this.skillStates.earth.cooldown = 4.5;
+    this.playSound('earth');
     this.selectedSkill = null;
     this.playEarthBurst(cell);
     affected.forEach((enemy) => {
@@ -2087,6 +2416,7 @@ export class RealtimeGame {
 
   private launchPlayerArrow(enemy: EnemyState | null): void {
     if (enemy && enemy.hp <= 0) enemy = null;
+    this.playSound('bow');
     const direction = this.camera.getWorldDirection(new THREE.Vector3());
     const start = this.camera.position.clone().add(direction.clone().multiplyScalar(0.75));
     const end = enemy
@@ -2114,6 +2444,7 @@ export class RealtimeGame {
   }
 
   private updatePlayerMovement(delta: number): void {
+    if (this.phase === 'ready') return;
     this.updateVerticalMovement(delta);
     let forward = Number(this.keys.has('KeyW')) - Number(this.keys.has('KeyS'));
     let strafe = Number(this.keys.has('KeyD')) - Number(this.keys.has('KeyA'));
@@ -2193,6 +2524,7 @@ export class RealtimeGame {
       const location = this.locationAtCell(cell);
       if (location !== this.currentLocation) this.enterLocation(location);
       this.checkHealingTile(cell);
+      this.checkLevelTile(cell);
     }
   }
 
@@ -2209,6 +2541,7 @@ export class RealtimeGame {
     this.shieldVisual.visible = active || this.invulnerable;
     this.shieldLabel.textContent = this.invulnerable ? 'INVULNERABLE · P' : active ? 'ESCUDO ACTIVO · Q' : 'ESCUDO · MANTENER Q';
     this.shieldLabel.classList.toggle('shield-active', active || this.invulnerable);
+    if (active) this.playSound('shield');
   }
 
   private setInvulnerable(active: boolean): void {
@@ -2221,6 +2554,7 @@ export class RealtimeGame {
   }
 
   private updateEnemies(delta: number): void {
+    if (this.phase !== 'combat') return;
     if (this.invulnerable) {
       this.enemies.forEach((enemy) => {
         enemy.stepTarget = null;
@@ -2245,10 +2579,10 @@ export class RealtimeGame {
       const distance = Math.hypot(dx, dz);
       enemy.group.rotation.y = Math.atan2(dx, dz);
 
-      if (this.phase !== 'combat') return;
       if (distance > 50) return;
 
-      const canSeePlayer = distance <= 35 && hasLineOfSight(this.grid, enemy.cell, playerCell, 16);
+      const darkHunter = (enemy.model === 'shadow' || enemy.model === 'wraith') && this.nightBlend > 0.5;
+      const canSeePlayer = distance <= (darkHunter ? 44 : 35) && hasLineOfSight(this.grid, enemy.cell, playerCell, 16);
       if (canSeePlayer) {
         enemy.lastKnownPlayerCell = playerCell;
         enemy.lastSeenTimer = 0;
@@ -2388,7 +2722,8 @@ export class RealtimeGame {
   private updateEnemyChase(enemy: EnemyState, playerOnGrid: THREE.Vector3, delta: number): void {
     if (enemy.stepTarget) {
       enemy.stepElapsed += delta;
-      const progress = Math.min(enemy.stepElapsed / ENEMY_STEP_DURATION, 1);
+      const stepDuration = enemy.model === 'shadow' ? ENEMY_STEP_DURATION * 0.78 : ENEMY_STEP_DURATION;
+      const progress = Math.min(enemy.stepElapsed / stepDuration, 1);
       enemy.group.position.lerpVectors(enemy.stepStart, enemy.stepEnd, progress);
       if (progress === 1) {
         enemy.cell = enemy.stepTarget;
@@ -2416,6 +2751,7 @@ export class RealtimeGame {
   private launchEnemyAttack(enemy: EnemyState): void {
     if (this.invulnerable || enemy.hp <= 0 || this.phase !== 'combat' || !this.hasLivingEnemies()) return;
     if (enemy.model === 'crab') {
+      this.playSound('crab');
       enemy.attackCooldown = 2.4;
       const originalScale = enemy.group.scale.clone();
       this.addEffect(enemy.group, 360, (progress) => {
@@ -2433,7 +2769,8 @@ export class RealtimeGame {
       this.setNotice(`${enemy.name} ataca con sus pinzas.`);
       return;
     }
-    enemy.attackCooldown = 3.2;
+    enemy.attackCooldown = enemy.model === 'shadow' ? 2.45 : enemy.model === 'wraith' ? 3.65 : 3.2;
+    this.playSound('draw');
     if (!enemy.bow || !enemy.bowString || !enemy.bowArrow) return;
     const bow = enemy.bow;
     const bowString = enemy.bowString;
@@ -2464,6 +2801,7 @@ export class RealtimeGame {
 
   private launchEnemyArrow(enemy: EnemyState): void {
     if (this.invulnerable || enemy.hp <= 0 || this.phase !== 'combat' || !this.hasLivingEnemies()) return;
+    this.playSound('enemy-bow');
     const start = enemy.group.position.clone().add(new THREE.Vector3(0, 1.55, 0));
     const end = this.camera.position.clone().add(new THREE.Vector3(0, -0.15, 0));
     const direction = end.clone().sub(start);
@@ -2488,6 +2826,7 @@ export class RealtimeGame {
 
   private damagePlayer(amount: number): void {
     if (this.phase !== 'combat' || this.invulnerable) return;
+    this.playSound(this.isShielding ? 'shield' : 'player-hit');
     const damage = Math.max(1, Math.round(amount * (this.isShielding ? 0.22 : 1)));
     this.playerHp = Math.max(0, this.playerHp - damage);
     this.playPlayerImpact(`-${damage} PV`, 0xe7d2a0);
@@ -2652,11 +2991,31 @@ export class RealtimeGame {
   }
 
   private flashShield(): void {
-    const face = this.shieldVisual.children[0] as THREE.Mesh<THREE.CircleGeometry, THREE.MeshBasicMaterial>;
-    face.material.opacity = 0.48;
-    window.setTimeout(() => {
-      if (this.isShielding) face.material.opacity = 0.22;
-    }, 140);
+    this.shieldFlashTimer = 0.22;
+  }
+
+  private updateShieldPose(delta: number): void {
+    const raised = this.isShielding || this.invulnerable;
+    const targetPosition = raised
+      ? new THREE.Vector3(-0.34, -0.08, -0.94)
+      : new THREE.Vector3(-0.48, -0.18, -0.92);
+    const targetRotation = raised
+      ? new THREE.Euler(-0.02, -0.18, -0.2)
+      : new THREE.Euler(0.04, -0.08, -0.12);
+    const blend = Math.min(delta * 11, 1);
+    this.shieldVisual.position.lerp(targetPosition, blend);
+    this.shieldVisual.rotation.x = THREE.MathUtils.lerp(this.shieldVisual.rotation.x, targetRotation.x, blend);
+    this.shieldVisual.rotation.y = THREE.MathUtils.lerp(this.shieldVisual.rotation.y, targetRotation.y, blend);
+    this.shieldVisual.rotation.z = THREE.MathUtils.lerp(this.shieldVisual.rotation.z, targetRotation.z, blend);
+    this.shieldFlashTimer = Math.max(0, this.shieldFlashTimer - delta);
+    const hitPulse = this.shieldFlashTimer > 0 ? Math.sin((this.shieldFlashTimer / 0.22) * Math.PI) : 0;
+    const targetScale = (raised ? 1.06 : 0.9) + hitPulse * 0.08;
+    this.shieldVisual.scale.lerp(new THREE.Vector3(targetScale, targetScale, targetScale), blend);
+    const boss = this.shieldVisual.getObjectByName('shield-boss');
+    if (boss instanceof THREE.Mesh && boss.material instanceof THREE.MeshStandardMaterial) {
+      boss.material.emissive.setHex(hitPulse > 0.05 ? 0x8a5b20 : 0x000000);
+      boss.material.emissiveIntensity = hitPulse * 0.8;
+    }
   }
 
   private addEffect(
@@ -2728,6 +3087,7 @@ export class RealtimeGame {
 
   private updateHud(): void {
     this.healthLabel.textContent = `PV ${this.playerHp} / ${this.playerMaxHp}`;
+    this.levelLabel.textContent = `NIVEL ${this.playerLevel} · ${this.levelTileProgress}/${this.playerLevel + 1}`;
     this.woodLabel.textContent = String(this.woodCount);
     this.buildWoodValue.textContent = String(this.woodCount);
     this.buildButtons.forEach((button, kind) => {
@@ -2736,11 +3096,13 @@ export class RealtimeGame {
     });
     const livingEnemies = this.enemies.filter((enemy) => enemy.hp > 0 && enemy.location === this.currentLocation).length;
     this.enemyCountLabel.textContent = `ENEMIGOS ${livingEnemies}`;
-    this.turnIndicator.textContent = this.phase === 'combat'
-      ? 'COMBATE ACTIVO'
-      : this.phase === 'victory'
-        ? 'MUNDO DESPEJADO'
-        : 'DERROTA';
+    this.turnIndicator.textContent = this.phase === 'ready'
+      ? 'LISTO PARA INICIAR'
+      : this.phase === 'combat'
+        ? 'COMBATE ACTIVO'
+        : this.phase === 'victory'
+          ? 'MUNDO DESPEJADO'
+          : 'DERROTA';
     this.shieldLabel.textContent = this.invulnerable ? 'INVULNERABLE · P' : this.isShielding ? 'ESCUDO ACTIVO · Q' : 'ESCUDO · MANTENER Q';
     this.shieldLabel.classList.toggle('shield-active', this.isShielding || this.invulnerable);
     this.skillButtons.forEach((button, skill) => {
@@ -2774,6 +3136,48 @@ export class RealtimeGame {
     this.turnMessage.textContent = message;
   }
 
+  private playSound(kind: 'bow' | 'enemy-bow' | 'draw' | 'crab' | 'player-hit' | 'enemy-hit' | 'collect' | 'build' | 'heal' | 'earth' | 'wind' | 'water' | 'shield' | 'level-up' | 'flashlight'): void {
+    try {
+      if (!window.AudioContext) return;
+      this.audioContext ??= new window.AudioContext();
+      const context = this.audioContext;
+      if (context.state === 'suspended') void context.resume();
+      const patterns: Record<typeof kind, [number, number, number, OscillatorType, number]> = {
+        bow: [620, 260, 0.14, 'triangle', 0.12],
+        'enemy-bow': [410, 190, 0.18, 'sawtooth', 0.09],
+        draw: [180, 330, 0.22, 'triangle', 0.07],
+        crab: [150, 75, 0.19, 'square', 0.08],
+        'player-hit': [130, 55, 0.24, 'sawtooth', 0.14],
+        'enemy-hit': [280, 110, 0.15, 'square', 0.09],
+        collect: [520, 940, 0.2, 'sine', 0.1],
+        build: [240, 390, 0.2, 'triangle', 0.11],
+        heal: [430, 880, 0.42, 'sine', 0.11],
+        earth: [100, 48, 0.34, 'triangle', 0.15],
+        wind: [760, 290, 0.22, 'sawtooth', 0.07],
+        water: [360, 680, 0.3, 'sine', 0.09],
+        shield: [260, 520, 0.16, 'triangle', 0.08],
+        'level-up': [520, 1040, 0.52, 'sine', 0.12],
+        flashlight: [580, 440, 0.11, 'triangle', 0.055],
+      };
+      const [startFrequency, endFrequency, duration, wave, volume] = patterns[kind];
+      const now = context.currentTime;
+      const oscillator = context.createOscillator();
+      const gain = context.createGain();
+      oscillator.type = wave;
+      oscillator.frequency.setValueAtTime(startFrequency, now);
+      oscillator.frequency.exponentialRampToValueAtTime(endFrequency, now + duration);
+      gain.gain.setValueAtTime(0.0001, now);
+      gain.gain.exponentialRampToValueAtTime(volume, now + 0.018);
+      gain.gain.exponentialRampToValueAtTime(0.0001, now + duration);
+      oscillator.connect(gain);
+      gain.connect(context.destination);
+      oscillator.start(now);
+      oscillator.stop(now + duration + 0.02);
+    } catch {
+      // Audio is optional; a browser policy must not interrupt gameplay.
+    }
+  }
+
   private showDefeatMenu(): void {
     this.keys.clear();
     if (this.nativePointerLock) {
@@ -2786,6 +3190,9 @@ export class RealtimeGame {
   }
 
   private damageEnemy(enemy: EnemyState, amount: number): void {
+    if (enemy.hp <= 0) return;
+    this.playSound('enemy-hit');
+    amount += Math.max(0, this.playerLevel - 1) * 2;
     enemy.hp = Math.max(0, enemy.hp - amount);
     if (enemy.hp > 0 && enemy.model !== 'crab' && enemy.coverCooldown === 0) {
       enemy.needsCover = true;
@@ -2818,6 +3225,17 @@ export class RealtimeGame {
 
   private hasLivingEnemies(): boolean {
     return this.enemies.some((enemy) => enemy.hp > 0);
+  }
+
+  private startGame(): void {
+    if (this.phase !== 'ready') return;
+    this.phase = this.hasLivingEnemies() ? 'combat' : 'victory';
+    this.startMenu.hidden = true;
+    this.enemies.forEach((enemy) => {
+      if (enemy.hp > 0) enemy.attackCooldown = Math.max(enemy.attackCooldown, 2.5);
+    });
+    this.setNotice('La partida comenzó. ¡Explora y mantente alerta!');
+    this.updateHud();
   }
 
   private cancelEnemyEffects(enemy: EnemyState): void {
@@ -2966,6 +3384,7 @@ export class RealtimeGame {
   private animate = (time: number): void => {
     const delta = Math.min((time - (this.previousFrameTime || time)) / 1000, 0.05);
     this.previousFrameTime = time;
+    this.updateDayNight(delta);
 
     if (!this.worldMap.hidden) {
       this.renderer.render(this.scene, this.camera);
@@ -2974,10 +3393,23 @@ export class RealtimeGame {
     }
 
     this.updatePlayerMovement(delta);
+    this.updateShieldPose(delta);
     this.updateWaypoint();
     this.updateBuildingPreview();
     this.updateNetwork(delta);
     this.updateEnemies(delta);
+    this.enemies.forEach((enemy) => {
+      if (enemy.hp <= 0) return;
+      if (enemy.model === 'wraith') {
+        enemy.group.position.y = 0.16 + Math.sin(time * 0.0022 + enemy.cell.x) * 0.13;
+        enemy.group.children.filter((child) => child.name === 'wraith-trail')
+          .forEach((child, index) => { child.rotation.z = Math.sin(time * 0.0018 + index * 2) * 0.3; });
+      } else if (enemy.model === 'shadow') {
+        enemy.group.position.y = Math.sin(time * 0.004 + enemy.cell.y) * 0.025;
+      } else if (enemy.model !== 'crab') {
+        enemy.group.position.y = 0;
+      }
+    });
     this.updateEffects(delta * 1000);
     this.updateCooldowns(delta);
     if (!this.hoverCard.hidden) this.refreshHover();
@@ -2994,6 +3426,17 @@ export class RealtimeGame {
     this.playerSpeedBoost = Math.max(0, this.playerSpeedBoost - delta);
     this.healingTiles.forEach((tile) => {
       tile.glowMaterial.opacity = 0.62 + Math.sin(performance.now() * 0.004) * 0.14;
+    });
+    this.levelTiles.forEach((tile) => {
+      tile.phase += delta;
+      const crystal = tile.group.getObjectByName('level-tile-crystal');
+      if (crystal) {
+        crystal.position.y = 0.72 + Math.sin(tile.phase * 2.4) * 0.12;
+        crystal.rotation.y += delta * 1.5;
+        crystal.rotation.z = Math.sin(tile.phase * 1.3) * 0.12;
+      }
+      const ring = tile.group.getObjectByName('level-tile-ring');
+      if (ring) ring.scale.setScalar(1 + Math.sin(tile.phase * 2) * 0.06);
     });
     Object.values(this.skillStates).forEach((state) => {
       state.cooldown = Math.max(0, state.cooldown - delta);
