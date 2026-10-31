@@ -18,7 +18,7 @@ type SkillId = 'earth' | 'wind' | 'water';
 type Phase = 'ready' | 'combat' | 'victory' | 'defeat';
 type WorldLocationId = 'taganga' | 'centro' | 'rodadero' | 'gaira' | 'libano' | 'mamatoco' | 'bonda' | 'brumalia';
 type BuildingKind = 'floor' | 'wall' | 'house' | 'campfire';
-type BuildingRecord = { id: string; kind: BuildingKind; cell: Cell };
+type BuildingRecord = { id: string; kind: BuildingKind; cell: Cell; rotation?: number };
 type BuildingInstance = BuildingRecord & { group: THREE.Group };
 const BUILDING_COST: Record<BuildingKind, number> = { floor: 2, wall: 3, house: 12, campfire: 5 };
 const BUILDING_NAME: Record<BuildingKind, string> = { floor: 'Piso', wall: 'Muro', house: 'Casa', campfire: 'Fogata' };
@@ -387,6 +387,7 @@ export class RealtimeGame {
   private readonly builtStructures: BuildingInstance[] = [];
   private buildPreview!: THREE.Group;
   private selectedBuilding: BuildingKind | null = null;
+  private buildingRotation = 0;
   private woodCount = 0;
 
   constructor(root: HTMLElement) {
@@ -638,10 +639,11 @@ export class RealtimeGame {
       return;
     }
     this.selectedBuilding = kind;
+    this.buildingRotation = 0;
     this.setBuildPreviewKind(kind);
     this.buildPanel.hidden = true;
     this.root.classList.add('build-mode');
-    this.setNotice(`${BUILDING_NAME[kind]} seleccionada. Apunta a una casilla cercana y haz clic para colocarla. Pulsa B para cancelar.`);
+    this.setNotice(`${BUILDING_NAME[kind]} seleccionada. Gira con la rueda del mouse; haz clic para colocarla.`);
     this.updateHud();
     if (!this.pointerLocked && !this.nativePointerLock) {
       this.lockingMouse = true;
@@ -666,6 +668,7 @@ export class RealtimeGame {
     }
     const position = this.cellToWorld(cell);
     this.buildPreview.position.set(position.x, 0, position.z);
+    this.buildPreview.rotation.y = this.buildingRotation * Math.PI / 2;
     const buildable = this.canBuildAtCell(cell, this.selectedBuilding);
     this.buildPreview.traverse((object) => {
       if (!(object instanceof THREE.Mesh)) return;
@@ -700,13 +703,13 @@ export class RealtimeGame {
       return;
     }
     if (this.roomJoined && this.roomSocket?.readyState === WebSocket.OPEN) {
-      this.roomSocket.send(JSON.stringify({ type: 'place-building', kind, cell }));
+      this.roomSocket.send(JSON.stringify({ type: 'place-building', kind, cell, rotation: this.buildingRotation }));
       this.setNotice('Enviando construcción a la sala…');
       return;
     }
 
     this.woodCount -= cost;
-    this.addBuilding({ id: `local-${Date.now()}-${Math.floor(Math.random() * 100000)}`, kind, cell });
+    this.addBuilding({ id: `local-${Date.now()}-${Math.floor(Math.random() * 100000)}`, kind, cell, rotation: this.buildingRotation });
     this.playSound('build');
     this.setNotice(`${BUILDING_NAME[kind]} construida por ${cost} bloques de madera.`);
     this.updateHud();
@@ -724,6 +727,7 @@ export class RealtimeGame {
     const group = this.createBuildingModel(record.kind);
     const position = this.cellToWorld(record.cell);
     group.position.set(position.x, 0, position.z);
+    group.rotation.y = (((Number.isInteger(record.rotation) ? Number(record.rotation) : 0) % 4) + 4) % 4 * Math.PI / 2;
     group.userData.buildingId = record.id;
     this.scene.add(group);
     this.builtStructures.push({ ...record, cell: { ...record.cell }, group });
@@ -1780,6 +1784,7 @@ export class RealtimeGame {
     canvas.addEventListener('pointerup', this.onPointerUp);
     canvas.addEventListener('mousedown', this.onMouseDown);
     canvas.addEventListener('contextmenu', this.onContextMenu);
+    canvas.addEventListener('wheel', this.onWheel, { passive: false });
     document.addEventListener('pointerlockchange', this.onPointerLockChange);
     document.addEventListener('pointerlockerror', this.onPointerLockError);
     this.root.querySelectorAll<HTMLButtonElement>('[data-skill]').forEach((button) => {
@@ -2115,6 +2120,14 @@ export class RealtimeGame {
   }
 
   private readonly onContextMenu = (event: MouseEvent): void => event.preventDefault();
+
+  private readonly onWheel = (event: WheelEvent): void => {
+    if (!this.selectedBuilding) return;
+    event.preventDefault();
+    this.buildingRotation = (this.buildingRotation + (event.deltaY > 0 ? 1 : 3)) % 4;
+    this.buildPreview.rotation.y = this.buildingRotation * Math.PI / 2;
+    this.setNotice(`${BUILDING_NAME[this.selectedBuilding]} · orientación ${this.buildingRotation * 90}°. Haz clic para colocar.`);
+  };
 
   private readonly onKeyDown = (event: KeyboardEvent): void => {
     if (this.phase === 'ready') {
@@ -2763,7 +2776,7 @@ export class RealtimeGame {
         const distance = Math.hypot(this.camera.position.x - enemy.group.position.x, this.camera.position.z - enemy.group.position.z);
         if (distance > 3.1) return;
         this.playRing(this.camera.position.clone().add(new THREE.Vector3(0, -0.8, 0)), 0xef8c55);
-        this.damagePlayer(12);
+        this.damagePlayer(12, enemy);
         this.updateHud();
       }, enemy);
       this.setNotice(`${enemy.name} ataca con sus pinzas.`);
@@ -2818,14 +2831,14 @@ export class RealtimeGame {
       arrow.geometry.dispose();
       (arrow.material as THREE.Material).dispose();
       if (enemy.hp <= 0 || this.phase !== 'combat' || !this.hasLivingEnemies()) return;
-      this.damagePlayer(9);
+      this.damagePlayer(9, enemy);
       this.updateHud();
     }, enemy);
     this.setNotice(`${enemy.name} suelta una flecha.`);
   }
 
-  private damagePlayer(amount: number): void {
-    if (this.phase !== 'combat' || this.invulnerable) return;
+  private damagePlayer(amount: number, attacker?: EnemyState): void {
+    if (this.phase !== 'combat' || this.invulnerable || (attacker && attacker.hp <= 0)) return;
     this.playSound(this.isShielding ? 'shield' : 'player-hit');
     const damage = Math.max(1, Math.round(amount * (this.isShielding ? 0.22 : 1)));
     this.playerHp = Math.max(0, this.playerHp - damage);
@@ -3210,6 +3223,10 @@ export class RealtimeGame {
       healthBar.position.x = -0.45 * (1 - ratio);
     }
     if (enemy.hp === 0) {
+      enemy.attackCooldown = Number.POSITIVE_INFINITY;
+      enemy.stepTarget = null;
+      enemy.coverTarget = null;
+      enemy.coverPath = [];
       this.scene.remove(enemy.group);
       this.cancelEnemyEffects(enemy);
       if (!this.hasLivingEnemies()) {

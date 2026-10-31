@@ -6,7 +6,7 @@ type WorldLocation = 'taganga' | 'centro' | 'rodadero' | 'gaira' | 'libano' | 'm
 type BuildingKind = 'floor' | 'wall' | 'house' | 'campfire';
 type WorldCell = { x: number; y: number };
 type HealingTilePosition = { tileId: WorldLocation; cell: WorldCell };
-type BuildingRecord = { id: string; kind: BuildingKind; cell: WorldCell };
+type BuildingRecord = { id: string; kind: BuildingKind; cell: WorldCell; rotation: number };
 type Room = {
   code: string;
   location: WorldLocation;
@@ -23,7 +23,7 @@ type ClientMessage =
   | { type: 'healing-tiles-sync'; tiles: HealingTilePosition[] }
   | { type: 'healing-tile-moved'; tileId: WorldLocation; cell: WorldCell }
   | { type: 'harvest-wood'; treeId: string }
-  | { type: 'place-building'; kind: BuildingKind; cell: WorldCell }
+  | { type: 'place-building'; kind: BuildingKind; cell: WorldCell; rotation?: number }
   | { type: 'leave-room' };
 type ServerMessage =
   | { type: 'room-joined'; playerId: string; code: string; location: WorldLocation; players: PlayerState[]; healingTiles: HealingTilePosition[]; harvestedTrees: string[]; buildings: BuildingRecord[] }
@@ -230,7 +230,8 @@ server.on('connection', (socket) => {
         send(socket, { type: 'build-error', message: 'Esa casilla ya está ocupada.' });
         return;
       }
-      const building: BuildingRecord = { id: randomUUID(), kind: message.kind, cell: message.cell };
+      const rotation = Number.isInteger(message.rotation) ? ((Number(message.rotation) % 4) + 4) % 4 : 0;
+      const building: BuildingRecord = { id: randomUUID(), kind: message.kind, cell: message.cell, rotation };
       room.buildings.push(building);
       current.state.wood -= cost;
       broadcast(room, { type: 'building-placed', builderId: playerId, building, wood: current.state.wood });
