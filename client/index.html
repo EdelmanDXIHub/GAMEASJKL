@@ -54,6 +54,24 @@
       #wood-count { color: #f2dfac; }
       #day-night-label.night-mode { color: #c4d2ff; border-color: rgba(153, 174, 255, 0.5); }
       .turn-pill { min-width: 125px; color: #f3d89a; text-align: center; }
+      #xp-ranking {
+        position: absolute;
+        z-index: 4;
+        top: 88px;
+        left: 24px;
+        width: min(250px, calc(100vw - 32px));
+        padding: 12px 13px;
+        border: 1px solid rgba(220, 202, 151, 0.3);
+        background: rgba(12, 21, 18, 0.86);
+        color: #e8ecdc;
+        pointer-events: none;
+      }
+      #xp-ranking h2 { margin: 0 0 8px; color: #f0d99c; font: 700 12px Georgia, serif; letter-spacing: 0.11em; }
+      #xp-ranking-list { display: grid; gap: 5px; margin: 0; padding: 0; list-style: none; }
+      #xp-ranking-list li { display: flex; justify-content: space-between; gap: 8px; color: #c7d0c0; font-size: 10px; }
+      #xp-ranking-list li.local-player .ranking-player { color: #f0d99c; }
+      .ranking-player { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+      .ranking-score { flex: 0 0 auto; color: #a9bd9f; font-variant-numeric: tabular-nums; }
       #room-button {
         pointer-events: auto;
         min-height: 34px;
@@ -125,6 +143,31 @@
         height: 21px;
         border-color: #9af4ed;
         box-shadow: 0 0 14px rgba(111, 240, 230, 0.8);
+      }
+      #incoming-warning {
+        position: absolute;
+        z-index: 7;
+        top: 31%;
+        left: 50%;
+        max-width: calc(100vw - 28px);
+        padding: 11px 16px;
+        border: 1px solid rgba(255, 194, 91, 0.9);
+        background: rgba(52, 20, 13, 0.88);
+        box-shadow: 0 0 24px rgba(255, 90, 28, 0.45);
+        color: #ffe5af;
+        font-size: 14px;
+        font-weight: 900;
+        letter-spacing: 0.08em;
+        text-align: center;
+        text-shadow: 0 1px 6px #671b0a;
+        transform: translateX(-50%);
+        animation: incoming-pulse 0.28s ease-in-out infinite alternate;
+        pointer-events: none;
+      }
+      #incoming-warning[hidden] { display: none; }
+      @keyframes incoming-pulse {
+        from { opacity: 0.78; scale: 0.98; }
+        to { opacity: 1; scale: 1.02; }
       }
       .reticle.captured::before, .reticle.captured::after {
         content: "";
@@ -451,6 +494,10 @@
         .player-name { display: none; }
         .stat-pill, .turn-pill { min-width: auto; padding: 7px 8px; font-size: 10px; }
         #room-button { min-height: 30px; padding: 0 7px; font-size: 9px; }
+        #xp-ranking { top: 78px; left: 8px; width: 190px; padding: 9px 10px; }
+        #xp-ranking-list li { font-size: 9px; }
+        #turn-message { top: 78px; left: auto; right: 8px; max-width: calc(100vw - 220px); transform: none; }
+        #world-waypoint { top: 190px; }
         #wood-stock { min-width: auto; padding: 7px 8px; font-size: 10px; }
         #turn-message { top: 73px; font-size: 11px; }
         #world-waypoint { top: 112px; font-size: 11px; }
@@ -490,20 +537,25 @@
           <strong>KRIKAS</strong>
         </div>
         <div class="player-panel">
-          <span class="player-name">Krika, Arquera</span>
+          <span id="player-nickname-label" class="player-name">Jugador</span>
           <span class="stat-pill"><strong id="player-health">PV 100 / 100</strong></span>
           <span class="stat-pill"><strong id="player-level">NIVEL 1 · 0/2</strong></span>
           <span id="day-night-label" class="stat-pill">DÍA · 10:00</span>
           <span id="wood-stock" class="stat-pill">MADERA · <strong id="wood-count">0</strong></span>
-          <span id="player-shield" class="stat-pill shield-pill">ESCUDO · MANTENER Q</span>
+          <span id="player-shield" class="stat-pill shield-pill">ESCUDO · CLIC DERECHO</span>
           <span class="stat-pill"><strong id="enemy-count">ENEMIGOS 4</strong></span>
           <span id="turn-indicator" class="turn-pill">COMBATE ACTIVO</span>
           <button id="room-button" type="button">SALA · SOLO</button>
         </div>
       </header>
-      <div id="turn-message">WASD: mover · F: madera · E: linterna · B: construir · M: mapa</div>
+      <aside id="xp-ranking" aria-label="Ranking de experiencia">
+        <h2>RANKING · XP</h2>
+        <ol id="xp-ranking-list"></ol>
+      </aside>
+      <div id="turn-message">WASD: mover · Q: apuntar · clic derecho: escudo · F: madera · E: linterna · B: construir · M: mapa</div>
       <div id="world-waypoint" hidden aria-live="polite"></div>
       <div class="reticle" aria-hidden="true"></div>
+      <div id="incoming-warning" hidden role="alert" aria-live="assertive"></div>
       <section id="hover-card" class="hover-card" hidden aria-live="polite">
         <h2 id="hover-name"></h2>
         <p id="hover-role"></p>
@@ -567,7 +619,7 @@
             </div>
             <button id="close-room" class="room-close" type="button" aria-label="Cerrar sala">×</button>
           </header>
-          <label class="room-field">Nombre del jugador<input id="room-player-name" maxlength="20" value="Krika" /></label>
+          <label class="room-field">Nickname obligatorio<input id="room-player-name" maxlength="20" placeholder="Escribe tu nickname" autocomplete="nickname" required /></label>
           <label class="room-field">Servidor WebSocket<input id="room-server-url" inputmode="url" /></label>
           <div class="room-actions">
             <button id="create-room" class="room-action" type="button">CREAR SALA</button>
@@ -585,7 +637,7 @@
           </section>
         </div>
       </section>
-      <div class="controls-note">WASD: mover · F: madera · E: linterna · B: construir · Shift + W: correr · M: mapa · clic: colocar</div>
+      <div class="controls-note">WASD: mover · Q: apuntar · clic derecho: escudo · F: madera · E: linterna · B: construir · Shift + W: correr · M: mapa · clic: colocar</div>
       <section id="build-panel" hidden aria-label="Construir">
         <header class="build-header"><span>CONSTRUIR · MADERA <span id="build-wood-value">0</span></span><button id="close-build" type="button" aria-label="Cerrar construcción">×</button></header>
         <div class="build-options">

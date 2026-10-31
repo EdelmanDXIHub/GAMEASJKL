@@ -223,8 +223,8 @@ type HealingTileState = {
 };
 type LevelTileState = { cell: Cell; group: THREE.Group; phase: number };
 
-type NetworkPlayer = { id: string; name: string; x: number; z: number; yaw: number; hp: number; wood: number; shielding: boolean };
-type RemotePlayer = { group: THREE.Group; target: THREE.Vector3; yaw: number };
+type NetworkPlayer = { id: string; name: string; x: number; z: number; yaw: number; hp: number; wood: number; xp: number; level: number; shielding: boolean };
+type RemotePlayer = { group: THREE.Group; target: THREE.Vector3; yaw: number; name: string; xp: number; level: number };
 const WORLD_LOCATION_IDS: WorldLocationId[] = ['taganga', 'centro', 'rodadero', 'gaira', 'libano', 'mamatoco', 'bonda', 'brumalia'];
 
 function isWorldLocation(value: unknown): value is WorldLocationId {
@@ -318,6 +318,7 @@ export class RealtimeGame {
   private playerHp = 100;
   private playerMaxHp = 100;
   private playerLevel = 1;
+  private playerXP = 0;
   private levelTileProgress = 0;
   private playerSpeedBoost = 0;
   private bowCooldown = 0;
@@ -357,11 +358,17 @@ export class RealtimeGame {
   private readonly hoverHealthFill: HTMLElement;
   private readonly healthLabel: HTMLElement;
   private readonly levelLabel: HTMLElement;
+  private readonly playerNameLabel: HTMLElement;
+  private readonly rankingList: HTMLElement;
+  private rankingSignature = '';
+  private playerNickname = '';
   private readonly shieldLabel: HTMLElement;
   private readonly enemyCountLabel: HTMLElement;
   private readonly turnIndicator: HTMLElement;
   private readonly dayNightLabel: HTMLElement;
   private readonly turnMessage: HTMLElement;
+  private readonly incomingWarning: HTMLElement;
+  private incomingWarningTimer = 0;
   private readonly defeatMenu: HTMLElement;
   private readonly startMenu: HTMLElement;
   private readonly skillButtons = new Map<SkillId, HTMLButtonElement>();
@@ -406,11 +413,14 @@ export class RealtimeGame {
     this.hoverHealthFill = this.getElement('#hover-health-fill');
     this.healthLabel = this.getElement('#player-health');
     this.levelLabel = this.getElement('#player-level');
+    this.playerNameLabel = this.getElement('#player-nickname-label');
+    this.rankingList = this.getElement('#xp-ranking-list');
     this.shieldLabel = this.getElement('#player-shield');
     this.enemyCountLabel = this.getElement('#enemy-count');
     this.turnIndicator = this.getElement('#turn-indicator');
     this.dayNightLabel = this.getElement('#day-night-label');
     this.turnMessage = this.getElement('#turn-message');
+    this.incomingWarning = this.getElement('#incoming-warning');
     this.defeatMenu = this.getElement('#defeat-menu');
     this.startMenu = this.getElement('#start-menu');
     this.roomLobby = this.getElement('#room-lobby');
@@ -1109,6 +1119,7 @@ export class RealtimeGame {
     const tile = this.levelTiles.find((candidate) => candidate.cell.x === cell.x && candidate.cell.y === cell.y);
     if (!tile) return;
     this.levelTileProgress++;
+    this.playerXP += 100;
     this.playSound('collect');
     const position = this.cellToWorld(tile.cell);
     position.y = 1.35;
@@ -1821,9 +1832,15 @@ export class RealtimeGame {
   }
 
   private connectToRoom(action: 'create-room' | 'join-room'): void {
-    const name = this.getElement<HTMLInputElement>('#room-player-name').value.trim() || 'Krika';
+    const nameInput = this.getElement<HTMLInputElement>('#room-player-name');
+    const name = nameInput.value.trim();
     const url = this.getElement<HTMLInputElement>('#room-server-url').value.trim();
     const code = this.getElement<HTMLInputElement>('#room-code-input').value.trim().toUpperCase();
+    if (!name) {
+      this.roomStatus.textContent = 'Escribe un nickname antes de entrar a la sala.';
+      nameInput.focus();
+      return;
+    }
     if (!url || (action === 'join-room' && !code)) { this.roomStatus.textContent = 'Escribe la dirección del servidor y el código de sala.'; return; }
     if (this.roomSocket) this.roomSocket.close();
     this.roomJoined = false;
@@ -1866,7 +1883,11 @@ export class RealtimeGame {
         const players = Array.isArray(message.players) ? message.players as NetworkPlayer[] : [];
         players.forEach((player) => {
           if (player.id === this.localPlayerId) {
+            this.playerNickname = player.name;
+            this.playerNameLabel.textContent = player.name;
             this.woodCount = Number.isFinite(player.wood) ? player.wood : 0;
+            this.playerXP = Number.isFinite(player.xp) ? player.xp : this.playerXP;
+            this.playerLevel = Number.isFinite(player.level) ? player.level : this.playerLevel;
             this.camera.position.set(player.x, PLAYER_HEIGHT, player.z);
             this.yaw = player.yaw;
             this.playerCell.x = this.worldToCell(player.x, player.z).x;
@@ -1883,7 +1904,14 @@ export class RealtimeGame {
       } else if (message.type === 'player-updated') {
         const player = message.player as NetworkPlayer;
         const remote = player?.id ? this.remotePlayers.get(player.id) : undefined;
-        if (remote) { remote.target.set(player.x, 0, player.z); remote.yaw = player.yaw; }
+        if (remote) {
+          remote.target.set(player.x, 0, player.z);
+          remote.yaw = player.yaw;
+          remote.name = player.name;
+          remote.xp = Number.isFinite(player.xp) ? player.xp : remote.xp;
+          remote.level = Number.isFinite(player.level) ? player.level : remote.level;
+          this.updateRoomLeaderboard();
+        }
       } else if (message.type === 'player-left') {
         this.removeRemotePlayer(String(message.playerId || ''));
         this.updateRoomMembers(this.remotePlayers.size + 1);
@@ -1963,7 +1991,15 @@ export class RealtimeGame {
     label.position.y = 2.15; label.scale.set(2.2, 0.55, 1); group.add(label);
     group.position.set(player.x, 0, player.z);
     this.scene.add(group);
-    this.remotePlayers.set(player.id, { group, target: new THREE.Vector3(player.x, 0, player.z), yaw: player.yaw });
+    this.remotePlayers.set(player.id, {
+      group,
+      target: new THREE.Vector3(player.x, 0, player.z),
+      yaw: player.yaw,
+      name: player.name,
+      xp: Number.isFinite(player.xp) ? player.xp : 0,
+      level: Number.isFinite(player.level) ? player.level : 1,
+    });
+    this.updateRoomLeaderboard();
   }
 
   private removeRemotePlayer(id: string): void {
@@ -1977,10 +2013,38 @@ export class RealtimeGame {
       }
     });
     this.remotePlayers.delete(id);
+    this.updateRoomLeaderboard();
   }
 
   private clearRemotePlayers(): void { [...this.remotePlayers.keys()].forEach((id) => this.removeRemotePlayer(id)); }
-  private updateRoomMembers(count: number): void { this.roomMembers.textContent = `${count} ${count === 1 ? 'jugador conectado' : 'jugadores conectados'}`; }
+  private updateRoomMembers(count: number): void {
+    this.roomMembers.textContent = `${count} ${count === 1 ? 'jugador conectado' : 'jugadores conectados'}`;
+    this.updateRoomLeaderboard();
+  }
+
+  private updateRoomLeaderboard(): void {
+    const entries = [
+      { id: this.localPlayerId || 'local', name: this.playerNickname || 'Jugador', xp: this.playerXP, level: this.playerLevel, local: true },
+      ...Array.from(this.remotePlayers, ([id, player]) => ({ id, name: player.name, xp: player.xp, level: player.level, local: false })),
+    ].sort((a, b) => b.xp - a.xp || b.level - a.level || a.name.localeCompare(b.name));
+    const signature = entries.map((entry) => `${entry.id}:${entry.name}:${entry.xp}:${entry.level}:${entry.local}`).join('|');
+    if (signature === this.rankingSignature) return;
+    this.rankingSignature = signature;
+    this.rankingList.replaceChildren();
+    entries.slice(0, 6).forEach((entry, index) => {
+      const row = document.createElement('li');
+      const identity = document.createElement('span');
+      identity.className = 'ranking-player';
+      identity.textContent = `${index + 1}. ${entry.name}${entry.local ? ' (Tú)' : ''}`;
+      const score = document.createElement('span');
+      score.className = 'ranking-score';
+      score.textContent = `N${entry.level} · ${entry.xp} XP`;
+      row.append(identity, score);
+      if (entry.local) row.classList.add('local-player');
+      this.rankingList.append(row);
+    });
+  }
+
   private updateNetwork(delta: number): void {
     this.remotePlayers.forEach((remote) => {
       remote.group.position.lerp(remote.target, Math.min(delta * 12, 1));
@@ -1992,6 +2056,7 @@ export class RealtimeGame {
     this.networkUpdateElapsed = 0;
     this.roomSocket.send(JSON.stringify({ type: 'player-state', state: {
       x: this.camera.position.x, z: this.camera.position.z, yaw: this.yaw, hp: this.playerHp, shielding: this.isShielding,
+      xp: this.playerXP, level: this.playerLevel,
     } }));
   }
 
@@ -1999,12 +2064,11 @@ export class RealtimeGame {
     if (this.phase === 'ready') return;
     if (event.button === 2) {
       event.preventDefault();
-      this.aiming = true;
+      this.setShielding(true);
       this.dragging = true;
       this.lastPointerX = event.clientX;
       this.lastPointerY = event.clientY;
       if (!this.nativePointerLock) this.renderer.domElement.setPointerCapture(event.pointerId);
-      this.root.querySelector('.reticle')?.classList.add('aiming');
       return;
     }
 
@@ -2041,8 +2105,7 @@ export class RealtimeGame {
     if (event.button === 0) this.leftButtonHeld = false;
     if (event.button === 2) {
       this.dragging = false;
-      this.aiming = false;
-      this.root.querySelector('.reticle')?.classList.remove('aiming');
+      this.setShielding(false);
     }
   };
 
@@ -2095,7 +2158,7 @@ export class RealtimeGame {
     this.lockingMouse = false;
     this.root.classList.toggle('pointer-locked', this.pointerLocked);
     this.root.querySelector('.reticle')?.classList.add('captured');
-    this.setNotice('Mueve el mouse para mirar · clic izquierdo dispara · Q protege · Esc libera.');
+    this.setNotice('Mueve el mouse para mirar · Q apunta · clic izquierdo dispara · clic derecho protege · Esc libera.');
   };
 
   private readonly onPointerLockError = (): void => {
@@ -2108,15 +2171,16 @@ export class RealtimeGame {
     this.pointerLocked = true;
     this.root.classList.add('pointer-locked');
     this.root.querySelector('.reticle')?.classList.add('captured');
-    this.setNotice('Mueve el mouse para mirar · clic izquierdo dispara · Q protege · Esc libera.');
+    this.setNotice('Mueve el mouse para mirar · Q apunta · clic izquierdo dispara · clic derecho protege · Esc libera.');
   }
 
   private releaseCaptureUi(): void {
     this.pointerLocked = false;
-    this.aiming = false;
+    this.setAiming(false);
     this.dragging = false;
+    if (this.isShielding) this.setShielding(false);
     this.root.classList.remove('pointer-locked');
-    this.root.querySelector('.reticle')?.classList.remove('aiming', 'captured');
+    this.root.querySelector('.reticle')?.classList.remove('captured');
   }
 
   private readonly onContextMenu = (event: MouseEvent): void => event.preventDefault();
@@ -2189,7 +2253,7 @@ export class RealtimeGame {
         this.isGrounded = false;
       }
     }
-    if (event.code === 'KeyQ') this.setShielding(true);
+    if (event.code === 'KeyQ' && !event.repeat) this.setAiming(true);
     if (event.code === 'Digit1') this.selectSkill('earth');
     if (event.code === 'Digit2') this.selectSkill('wind');
     if (event.code === 'Digit3') this.selectSkill('water');
@@ -2197,7 +2261,7 @@ export class RealtimeGame {
 
   private readonly onKeyUp = (event: KeyboardEvent): void => {
     this.keys.delete(event.code);
-    if (event.code === 'KeyQ') this.setShielding(false);
+    if (event.code === 'KeyQ') this.setAiming(false);
   };
 
   private toggleWorldMap(): void {
@@ -2209,6 +2273,7 @@ export class RealtimeGame {
 
     this.keys.clear();
     if (this.isShielding) this.setShielding(false);
+    if (this.aiming) this.setAiming(false);
     if (this.nativePointerLock) {
       document.exitPointerLock();
     } else if (this.pointerLocked) {
@@ -2552,7 +2617,7 @@ export class RealtimeGame {
     if (this.phase === 'defeat') active = false;
     this.isShielding = active;
     this.shieldVisual.visible = active || this.invulnerable;
-    this.shieldLabel.textContent = this.invulnerable ? 'INVULNERABLE · P' : active ? 'ESCUDO ACTIVO · Q' : 'ESCUDO · MANTENER Q';
+    this.shieldLabel.textContent = this.invulnerable ? 'INVULNERABLE · P' : active ? 'ESCUDO ACTIVO · CLIC DERECHO' : 'ESCUDO · CLIC DERECHO';
     this.shieldLabel.classList.toggle('shield-active', active || this.invulnerable);
     if (active) this.playSound('shield');
   }
@@ -2560,10 +2625,16 @@ export class RealtimeGame {
   private setInvulnerable(active: boolean): void {
     this.invulnerable = active;
     this.shieldVisual.visible = active || this.isShielding;
-    this.shieldLabel.textContent = active ? 'INVULNERABLE · P' : this.isShielding ? 'ESCUDO ACTIVO · Q' : 'ESCUDO · MANTENER Q';
+    this.shieldLabel.textContent = active ? 'INVULNERABLE · P' : this.isShielding ? 'ESCUDO ACTIVO · CLIC DERECHO' : 'ESCUDO · CLIC DERECHO';
     this.shieldLabel.classList.toggle('shield-active', active || this.isShielding);
     this.setNotice(active ? 'Invulnerabilidad activada: los enemigos no te atacarán. Pulsa P para desactivarla.' : 'Invulnerabilidad desactivada.');
     this.updateHud();
+  }
+
+  private setAiming(active: boolean): void {
+    if (this.phase === 'defeat') active = false;
+    this.aiming = active;
+    this.root.querySelector('.reticle')?.classList.toggle('aiming', active);
   }
 
   private updateEnemies(delta: number): void {
@@ -2815,26 +2886,74 @@ export class RealtimeGame {
   private launchEnemyArrow(enemy: EnemyState): void {
     if (this.invulnerable || enemy.hp <= 0 || this.phase !== 'combat' || !this.hasLivingEnemies()) return;
     this.playSound('enemy-bow');
+    this.showIncomingArrowWarning(enemy);
     const start = enemy.group.position.clone().add(new THREE.Vector3(0, 1.55, 0));
     const end = this.camera.position.clone().add(new THREE.Vector3(0, -0.15, 0));
     const direction = end.clone().sub(start);
-    const arrow = new THREE.Mesh(
-      new THREE.ConeGeometry(0.055, 0.42, 6),
-      new THREE.MeshStandardMaterial({ color: 0xe7d2a0, emissive: 0x4e3b1f, emissiveIntensity: 0.25 }),
-    );
-    arrow.position.copy(start);
-    arrow.quaternion.setFromUnitVectors(new THREE.Vector3(0, 1, 0), direction.clone().normalize());
-    this.scene.add(arrow);
-    this.addEffect(arrow, 420, (progress) => {
-      arrow.position.lerpVectors(start, end, progress);
+    const projectile = new THREE.Group();
+    const shaftMaterial = new THREE.MeshStandardMaterial({ color: 0xffc36a, emissive: 0xff761c, emissiveIntensity: 2.4, metalness: 0.18, roughness: 0.35 });
+    const tipMaterial = new THREE.MeshStandardMaterial({ color: 0xfff1c2, emissive: 0xff3b12, emissiveIntensity: 3.5, metalness: 0.25, roughness: 0.24 });
+    const featherMaterial = new THREE.MeshStandardMaterial({ color: 0x9d271c, emissive: 0x591007, emissiveIntensity: 0.8, roughness: 0.6 });
+    const shaft = new THREE.Mesh(new THREE.CylinderGeometry(0.035, 0.045, 1.1, 8), shaftMaterial);
+    projectile.add(shaft);
+    const tip = new THREE.Mesh(new THREE.ConeGeometry(0.12, 0.36, 8), tipMaterial);
+    tip.position.y = 0.72;
+    projectile.add(tip);
+    const collar = new THREE.Mesh(new THREE.TorusGeometry(0.075, 0.026, 6, 12), tipMaterial);
+    collar.position.y = 0.48;
+    collar.rotation.x = Math.PI / 2;
+    projectile.add(collar);
+    for (const side of [-1, 1]) {
+      const feather = new THREE.Mesh(new THREE.BoxGeometry(0.22, 0.16, 0.035), featherMaterial);
+      feather.position.set(side * 0.075, -0.48, 0);
+      feather.rotation.z = side * 0.48;
+      projectile.add(feather);
+    }
+    const glow = new THREE.PointLight(0xff7026, 2.2, 3.5, 1.8);
+    glow.position.y = 0.2;
+    projectile.add(glow);
+    projectile.quaternion.setFromUnitVectors(new THREE.Vector3(0, 1, 0), direction.clone().normalize());
+
+    const trailPositions = new Float32Array(6);
+    const trailGeometry = new THREE.BufferGeometry();
+    trailGeometry.setAttribute('position', new THREE.BufferAttribute(trailPositions, 3));
+    const trailMaterial = new THREE.LineBasicMaterial({ color: 0xff923a, transparent: true, opacity: 0.9, depthWrite: false });
+    const trail = new THREE.Line(trailGeometry, trailMaterial);
+    const projectileGroup = new THREE.Group();
+    projectileGroup.add(trail, projectile);
+    this.scene.add(projectileGroup);
+    this.addEffect(projectileGroup, 1050, (progress) => {
+      const position = new THREE.Vector3().lerpVectors(start, end, progress);
+      position.y += Math.sin(progress * Math.PI) * 0.52;
+      projectileGroup.position.copy(position);
+      trailPositions.set([start.x - position.x, start.y - position.y, start.z - position.z, 0, 0, 0]);
+      trailGeometry.attributes.position.needsUpdate = true;
+      trailMaterial.opacity = 0.9 * (1 - progress * 0.72);
     }, () => {
-      arrow.geometry.dispose();
-      (arrow.material as THREE.Material).dispose();
+      trailGeometry.dispose();
+      trailMaterial.dispose();
+      projectile.traverse((object) => {
+        if (!(object instanceof THREE.Mesh)) return;
+        object.geometry.dispose();
+        const materials = Array.isArray(object.material) ? object.material : [object.material];
+        materials.forEach((material) => material.dispose());
+      });
       if (enemy.hp <= 0 || this.phase !== 'combat' || !this.hasLivingEnemies()) return;
       this.damagePlayer(9, enemy);
       this.updateHud();
     }, enemy);
     this.setNotice(`${enemy.name} suelta una flecha.`);
+  }
+
+  private showIncomingArrowWarning(enemy: EnemyState): void {
+    const localEnemyPosition = this.camera.worldToLocal(enemy.group.position.clone());
+    const angle = Math.atan2(localEnemyPosition.x, -localEnemyPosition.z);
+    const directions = ['↑', '↗', '→', '↘', '↓', '↙', '←', '↖'];
+    const direction = directions[((Math.round(angle / (Math.PI / 4)) % 8) + 8) % 8];
+    this.incomingWarning.textContent = `${direction} ¡FLECHA EN CAMINO! · CLIC DERECHO PARA CUBRIRTE`;
+    this.incomingWarning.hidden = false;
+    this.incomingWarningTimer = 1.15;
+    this.playSound('arrow-warning');
   }
 
   private damagePlayer(amount: number, attacker?: EnemyState): void {
@@ -3101,6 +3220,7 @@ export class RealtimeGame {
   private updateHud(): void {
     this.healthLabel.textContent = `PV ${this.playerHp} / ${this.playerMaxHp}`;
     this.levelLabel.textContent = `NIVEL ${this.playerLevel} · ${this.levelTileProgress}/${this.playerLevel + 1}`;
+    this.updateRoomLeaderboard();
     this.woodLabel.textContent = String(this.woodCount);
     this.buildWoodValue.textContent = String(this.woodCount);
     this.buildButtons.forEach((button, kind) => {
@@ -3116,7 +3236,7 @@ export class RealtimeGame {
         : this.phase === 'victory'
           ? 'MUNDO DESPEJADO'
           : 'DERROTA';
-    this.shieldLabel.textContent = this.invulnerable ? 'INVULNERABLE · P' : this.isShielding ? 'ESCUDO ACTIVO · Q' : 'ESCUDO · MANTENER Q';
+    this.shieldLabel.textContent = this.invulnerable ? 'INVULNERABLE · P' : this.isShielding ? 'ESCUDO ACTIVO · CLIC DERECHO' : 'ESCUDO · CLIC DERECHO';
     this.shieldLabel.classList.toggle('shield-active', this.isShielding || this.invulnerable);
     this.skillButtons.forEach((button, skill) => {
       const cooldown = this.skillStates[skill].cooldown;
@@ -3149,7 +3269,7 @@ export class RealtimeGame {
     this.turnMessage.textContent = message;
   }
 
-  private playSound(kind: 'bow' | 'enemy-bow' | 'draw' | 'crab' | 'player-hit' | 'enemy-hit' | 'collect' | 'build' | 'heal' | 'earth' | 'wind' | 'water' | 'shield' | 'level-up' | 'flashlight'): void {
+  private playSound(kind: 'bow' | 'enemy-bow' | 'draw' | 'crab' | 'player-hit' | 'enemy-hit' | 'collect' | 'build' | 'heal' | 'earth' | 'wind' | 'water' | 'shield' | 'level-up' | 'flashlight' | 'arrow-warning'): void {
     try {
       if (!window.AudioContext) return;
       this.audioContext ??= new window.AudioContext();
@@ -3171,6 +3291,7 @@ export class RealtimeGame {
         shield: [260, 520, 0.16, 'triangle', 0.08],
         'level-up': [520, 1040, 0.52, 'sine', 0.12],
         flashlight: [580, 440, 0.11, 'triangle', 0.055],
+        'arrow-warning': [880, 620, 0.25, 'sine', 0.09],
       };
       const [startFrequency, endFrequency, duration, wave, volume] = patterns[kind];
       const now = context.currentTime;
@@ -3441,6 +3562,10 @@ export class RealtimeGame {
   private updateCooldowns(delta: number): void {
     this.bowCooldown = Math.max(0, this.bowCooldown - delta);
     this.playerSpeedBoost = Math.max(0, this.playerSpeedBoost - delta);
+    if (this.incomingWarningTimer > 0) {
+      this.incomingWarningTimer = Math.max(0, this.incomingWarningTimer - delta);
+      this.incomingWarning.hidden = this.incomingWarningTimer === 0;
+    }
     this.healingTiles.forEach((tile) => {
       tile.glowMaterial.opacity = 0.62 + Math.sin(performance.now() * 0.004) * 0.14;
     });

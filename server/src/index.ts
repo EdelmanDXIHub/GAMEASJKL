@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import { WebSocket, WebSocketServer } from 'ws';
 
-type PlayerState = { id: string; name: string; x: number; z: number; yaw: number; hp: number; wood: number; shielding: boolean };
+type PlayerState = { id: string; name: string; x: number; z: number; yaw: number; hp: number; wood: number; xp: number; level: number; shielding: boolean };
 type WorldLocation = 'taganga' | 'centro' | 'rodadero' | 'gaira' | 'libano' | 'mamatoco' | 'bonda' | 'brumalia';
 type BuildingKind = 'floor' | 'wall' | 'house' | 'campfire';
 type WorldCell = { x: number; y: number };
@@ -118,7 +118,7 @@ function createPlayer(socket: WebSocket, name: unknown, room: Room): void {
     id: playerId, name: sanitizeName(name),
     x: (spawn.x - 31.5) * 2.2 + (slot % 4) * 0.9,
     z: (spawn.y - 27.5) * 2.2 + Math.floor(slot / 4) * 0.9,
-    yaw: 0, hp: 100, wood: 0, shielding: false,
+    yaw: 0, hp: 100, wood: 0, xp: 0, level: 1, shielding: false,
   };
   room.players.set(playerId, { socket, state: player, roomCode: room.code });
   sessions.set(socket, playerId);
@@ -138,6 +138,10 @@ server.on('connection', (socket) => {
     if (!message) { send(socket, { type: 'room-error', message: 'Mensaje de red no válido.' }); return; }
     if (message.type === 'create-room' || message.type === 'join-room') {
       removePlayer(socket);
+      if (typeof message.name !== 'string' || !message.name.trim()) {
+        send(socket, { type: 'room-error', message: 'Escribe un nickname antes de entrar a la sala.' });
+        return;
+      }
       let room: Room | undefined;
       if (message.type === 'create-room') {
         room = {
@@ -247,6 +251,8 @@ server.on('connection', (socket) => {
         z: Math.max(-worldBounds, Math.min(worldBounds, state.z)),
         yaw: Math.max(-Math.PI * 8, Math.min(Math.PI * 8, state.yaw)),
         hp: Math.max(0, Math.min(100, Math.round(Number.isFinite(state.hp) ? state.hp : 100))),
+        xp: Math.max(0, Math.min(100000000, Math.round(Number.isFinite(state.xp) ? state.xp : current.state.xp))),
+        level: Math.max(1, Math.min(999, Math.round(Number.isFinite(state.level) ? state.level : current.state.level))),
         shielding: Boolean(state.shielding),
       };
       broadcast(room, { type: 'player-updated', player: current.state }, socket);
