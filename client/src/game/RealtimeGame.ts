@@ -329,6 +329,7 @@ export class RealtimeGame {
   private lastPointerX = 0;
   private lastPointerY = 0;
   private isShielding = false;
+  private invulnerable = false;
   private isGrounded = true;
   private verticalVelocity = 0;
   private readonly shieldVisual: THREE.Group;
@@ -1825,6 +1826,10 @@ export class RealtimeGame {
       if (!event.repeat) this.collectNearbyWood();
       return;
     }
+    if (event.code === 'KeyP') {
+      if (!event.repeat) this.setInvulnerable(!this.invulnerable);
+      return;
+    }
     if (event.code === 'Escape' && this.pointerLocked) {
       if (this.nativePointerLock) {
         document.exitPointerLock();
@@ -2201,12 +2206,29 @@ export class RealtimeGame {
   private setShielding(active: boolean): void {
     if (this.phase === 'defeat') active = false;
     this.isShielding = active;
-    this.shieldVisual.visible = active;
-    this.shieldLabel.textContent = active ? 'ESCUDO ACTIVO · Q' : 'ESCUDO · MANTENER Q';
-    this.shieldLabel.classList.toggle('shield-active', active);
+    this.shieldVisual.visible = active || this.invulnerable;
+    this.shieldLabel.textContent = this.invulnerable ? 'INVULNERABLE · P' : active ? 'ESCUDO ACTIVO · Q' : 'ESCUDO · MANTENER Q';
+    this.shieldLabel.classList.toggle('shield-active', active || this.invulnerable);
+  }
+
+  private setInvulnerable(active: boolean): void {
+    this.invulnerable = active;
+    this.shieldVisual.visible = active || this.isShielding;
+    this.shieldLabel.textContent = active ? 'INVULNERABLE · P' : this.isShielding ? 'ESCUDO ACTIVO · Q' : 'ESCUDO · MANTENER Q';
+    this.shieldLabel.classList.toggle('shield-active', active || this.isShielding);
+    this.setNotice(active ? 'Invulnerabilidad activada: los enemigos no te atacarán. Pulsa P para desactivarla.' : 'Invulnerabilidad desactivada.');
+    this.updateHud();
   }
 
   private updateEnemies(delta: number): void {
+    if (this.invulnerable) {
+      this.enemies.forEach((enemy) => {
+        enemy.stepTarget = null;
+        enemy.coverTarget = null;
+        enemy.coverPath = [];
+      });
+      return;
+    }
     const playerPosition = this.camera.position;
     const playerCell = { ...this.playerCell };
 
@@ -2392,7 +2414,7 @@ export class RealtimeGame {
   }
 
   private launchEnemyAttack(enemy: EnemyState): void {
-    if (enemy.hp <= 0 || this.phase !== 'combat' || !this.hasLivingEnemies()) return;
+    if (this.invulnerable || enemy.hp <= 0 || this.phase !== 'combat' || !this.hasLivingEnemies()) return;
     if (enemy.model === 'crab') {
       enemy.attackCooldown = 2.4;
       const originalScale = enemy.group.scale.clone();
@@ -2441,7 +2463,7 @@ export class RealtimeGame {
   }
 
   private launchEnemyArrow(enemy: EnemyState): void {
-    if (enemy.hp <= 0 || this.phase !== 'combat' || !this.hasLivingEnemies()) return;
+    if (this.invulnerable || enemy.hp <= 0 || this.phase !== 'combat' || !this.hasLivingEnemies()) return;
     const start = enemy.group.position.clone().add(new THREE.Vector3(0, 1.55, 0));
     const end = this.camera.position.clone().add(new THREE.Vector3(0, -0.15, 0));
     const direction = end.clone().sub(start);
@@ -2465,7 +2487,7 @@ export class RealtimeGame {
   }
 
   private damagePlayer(amount: number): void {
-    if (this.phase !== 'combat') return;
+    if (this.phase !== 'combat' || this.invulnerable) return;
     const damage = Math.max(1, Math.round(amount * (this.isShielding ? 0.22 : 1)));
     this.playerHp = Math.max(0, this.playerHp - damage);
     this.playPlayerImpact(`-${damage} PV`, 0xe7d2a0);
@@ -2548,7 +2570,7 @@ export class RealtimeGame {
     position.y += 0.1;
     this.playRing(position, color);
     this.playFloatLabel(position, label, color);
-    if (this.isShielding) this.flashShield();
+    if (this.isShielding || this.invulnerable) this.flashShield();
   }
 
   private playRing(position: THREE.Vector3, color: number): void {
@@ -2719,8 +2741,8 @@ export class RealtimeGame {
       : this.phase === 'victory'
         ? 'MUNDO DESPEJADO'
         : 'DERROTA';
-    this.shieldLabel.textContent = this.isShielding ? 'ESCUDO ACTIVO · Q' : 'ESCUDO · MANTENER Q';
-    this.shieldLabel.classList.toggle('shield-active', this.isShielding);
+    this.shieldLabel.textContent = this.invulnerable ? 'INVULNERABLE · P' : this.isShielding ? 'ESCUDO ACTIVO · Q' : 'ESCUDO · MANTENER Q';
+    this.shieldLabel.classList.toggle('shield-active', this.isShielding || this.invulnerable);
     this.skillButtons.forEach((button, skill) => {
       const cooldown = this.skillStates[skill].cooldown;
       const name = skill === 'earth' ? 'TIERRA' : skill === 'wind' ? 'VIENTO' : 'AGUA';
