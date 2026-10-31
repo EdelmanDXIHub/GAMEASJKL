@@ -50,6 +50,8 @@
         font-size: 12px;
       }
       .stat-pill strong { color: #e9f1d8; }
+      #wood-stock { min-width: 84px; color: #d9bd82; }
+      #wood-count { color: #f2dfac; }
       .turn-pill { min-width: 125px; color: #f3d89a; text-align: center; }
       #room-button {
         pointer-events: auto;
@@ -109,6 +111,7 @@
         transform: translate(-50%, -50%);
         pointer-events: none;
       }
+      .build-mode .reticle { border-color: #75f0b0; box-shadow: 0 0 15px rgba(75, 242, 158, 0.9); }
       .reticle::after {
         content: "";
         position: absolute;
@@ -381,6 +384,30 @@
       .skill-button strong { display: block; font-size: 12px; }
       .skill-button small { display: block; margin-top: 3px; color: #b8c5b7; font-size: 10px; }
       .controls-note { position: absolute; right: 20px; bottom: 102px; color: rgba(228, 235, 222, 0.72); font-size: 10px; }
+      #build-panel {
+        position: absolute;
+        z-index: 8;
+        right: 18px;
+        bottom: 108px;
+        display: grid;
+        gap: 8px;
+        width: min(280px, calc(100vw - 24px));
+        padding: 13px;
+        border: 1px solid rgba(220, 202, 151, 0.4);
+        background: rgba(17, 29, 25, 0.96);
+        box-shadow: 0 14px 38px rgba(0, 0, 0, 0.45);
+        pointer-events: auto;
+      }
+      #build-panel[hidden] { display: none; }
+      .build-header { display: flex; justify-content: space-between; align-items: center; color: #f0d99c; font-weight: 800; }
+      #close-build { width: 30px; height: 30px; border: 1px solid rgba(220, 232, 210, 0.2); background: #23332d; color: #edf2e8; font-size: 18px; cursor: pointer; }
+      .build-options { display: grid; grid-template-columns: 1fr 1fr; gap: 7px; }
+      .build-option { min-height: 48px; padding: 7px 9px; border: 1px solid rgba(219, 228, 208, 0.2); background: #263a30; color: #e8eee1; cursor: pointer; text-align: left; }
+      .build-option:hover, .build-option[aria-pressed="true"] { border-color: #72d9a5; background: #315542; }
+      .build-option:disabled { opacity: 0.42; cursor: default; }
+      .build-option strong, .build-option small { display: block; }
+      .build-option small { margin-top: 3px; color: #c5bd9e; font-size: 10px; }
+      .build-hint { margin: 0; color: #aebbaa; font-size: 10px; line-height: 1.4; }
 
       @media (max-width: 700px) {
         .topbar { padding: 14px; }
@@ -389,6 +416,7 @@
         .player-name { display: none; }
         .stat-pill, .turn-pill { min-width: auto; padding: 7px 8px; font-size: 10px; }
         #room-button { min-height: 30px; padding: 0 7px; font-size: 9px; }
+        #wood-stock { min-width: auto; padding: 7px 8px; font-size: 10px; }
         #turn-message { top: 73px; font-size: 11px; }
         #world-waypoint { top: 112px; font-size: 11px; }
         .bottom-panel { flex-wrap: wrap; gap: 7px; padding: 9px 8px 12px; }
@@ -398,6 +426,7 @@
         .skill-button small { font-size: 9px; }
         .end-button { min-width: 105px; min-height: 46px; padding: 6px; font-size: 10px; }
         .controls-note { display: none; }
+        #build-panel { right: 8px; bottom: 108px; }
         #world-map { padding: 10px; }
         .world-map-panel { max-height: calc(100dvh - 20px); }
         .map-content { grid-template-columns: minmax(0, 1fr) 155px; }
@@ -428,13 +457,14 @@
         <div class="player-panel">
           <span class="player-name">Krika, Arquera</span>
           <span class="stat-pill"><strong id="player-health">PV 100 / 100</strong></span>
+          <span id="wood-stock" class="stat-pill">MADERA · <strong id="wood-count">0</strong></span>
           <span id="player-shield" class="stat-pill shield-pill">ESCUDO · MANTENER Q</span>
           <span class="stat-pill"><strong id="enemy-count">ENEMIGOS 4</strong></span>
           <span id="turn-indicator" class="turn-pill">COMBATE ACTIVO</span>
           <button id="room-button" type="button">SALA · SOLO</button>
         </div>
       </header>
-      <div id="turn-message">WASD: moverse · Shift + W: correr · Espacio: saltar · Q: escudo · M: mapa</div>
+      <div id="turn-message">WASD: mover · E: recolectar madera · B: construir · M: mapa</div>
       <div id="world-waypoint" hidden aria-live="polite"></div>
       <div class="reticle" aria-hidden="true"></div>
       <section id="hover-card" class="hover-card" hidden aria-live="polite">
@@ -477,7 +507,7 @@
               <small>SECTOR SELECCIONADO</small>
               <h2 id="map-location-title">Bosque Brumalia</h2>
               <p id="map-location-description">Un bosque antiguo en las faldas de la Sierra, donde patrullan los arqueros enmascarados.</p>
-              <p class="map-travel-hint">Marca un barrio como destino y recorre los caminos caminando. Usa WASD para avanzar.</p>
+              <p class="map-travel-hint">Pisa la casilla verde con un + para recuperar hasta 35 PV; después reaparecerá en otro lugar aleatorio. Marca un destino y recorre los caminos con WASD.</p>
               <div class="map-region-list">
                 <span>Taganga · costa norte</span>
                 <span>Centro Histórico · bahía</span>
@@ -518,7 +548,17 @@
           </section>
         </div>
       </section>
-      <div class="controls-note">WASD: mover · Shift + W: correr · Espacio: saltar · Q: escudo · M: mapa · mouse: mirar · clic izquierdo: disparar · Esc: liberar</div>
+      <div class="controls-note">WASD: mover · E: madera · B: construir · Shift + W: correr · M: mapa · clic: colocar</div>
+      <section id="build-panel" hidden aria-label="Construir">
+        <header class="build-header"><span>CONSTRUIR · MADERA <span id="build-wood-value">0</span></span><button id="close-build" type="button" aria-label="Cerrar construcción">×</button></header>
+        <div class="build-options">
+          <button class="build-option" data-build="floor" type="button"><strong>Piso</strong><small>2 bloques</small></button>
+          <button class="build-option" data-build="wall" type="button"><strong>Muro</strong><small>3 bloques</small></button>
+          <button class="build-option" data-build="house" type="button"><strong>Casa</strong><small>12 bloques</small></button>
+          <button class="build-option" data-build="campfire" type="button"><strong>Fogata</strong><small>5 bloques</small></button>
+        </div>
+        <p class="build-hint">Apunta a una casilla cercana. El marcador verde confirma que puedes construir.</p>
+      </section>
       <footer class="bottom-panel">
         <div class="skills">
           <button class="skill-button" data-skill="earth" type="button">

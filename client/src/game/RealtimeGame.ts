@@ -17,6 +17,11 @@ const ARROW_RANGE = 100;
 type SkillId = 'earth' | 'wind' | 'water';
 type Phase = 'combat' | 'victory' | 'defeat';
 type WorldLocationId = 'taganga' | 'centro' | 'rodadero' | 'gaira' | 'libano' | 'mamatoco' | 'bonda' | 'brumalia';
+type BuildingKind = 'floor' | 'wall' | 'house' | 'campfire';
+type BuildingRecord = { id: string; kind: BuildingKind; cell: Cell };
+type BuildingInstance = BuildingRecord & { group: THREE.Group };
+const BUILDING_COST: Record<BuildingKind, number> = { floor: 2, wall: 3, house: 12, campfire: 5 };
+const BUILDING_NAME: Record<BuildingKind, string> = { floor: 'Piso', wall: 'Muro', house: 'Casa', campfire: 'Fogata' };
 const WORLD_CENTERS: Record<WorldLocationId, Cell> = {
   taganga: { x: 10, y: 7 }, centro: { x: 21, y: 21 }, rodadero: { x: 28, y: 38 },
   gaira: { x: 37, y: 46 }, libano: { x: 38, y: 23 }, mamatoco: { x: 48, y: 17 },
@@ -56,6 +61,7 @@ function buildWorldObstacles(): Array<[number, number]> {
 
 const OBSTACLES = buildWorldObstacles();
 type EnemyModel = 'archer' | 'crab';
+type LandmarkKind = 'palm' | 'rocks' | 'flowers' | 'market' | 'lantern' | 'bench' | 'reeds' | 'fallen-log' | 'mushrooms' | 'umbrella' | 'crates' | 'sign' | 'ruins' | 'bush';
 type EnemyDefinition = { id: string; name: string; cell: Cell; hp: number; color: number; model: EnemyModel };
 type WorldEncounter = {
   background: number;
@@ -73,6 +79,16 @@ const WORLD_LOCATION_DESCRIPTIONS: Record<WorldLocationId, string> = {
   mamatoco: 'Cruce oriental de caminos hacia los barrios altos y las estribaciones.',
   bonda: 'Poblado ribereno en la ruta que sube desde la ciudad hacia la Sierra Nevada.',
   brumalia: 'Bosque antiguo en las faldas de la Sierra, territorio de los chirretes del pando.',
+};
+const WORLD_LANDMARKS: Record<WorldLocationId, LandmarkKind[]> = {
+  taganga: ['palm', 'rocks', 'crates', 'reeds', 'flowers', 'sign', 'rocks', 'palm', 'bench', 'bush', 'crates', 'flowers'],
+  centro: ['market', 'crates', 'lantern', 'bench', 'market', 'sign', 'flowers', 'bush', 'ruins', 'lantern', 'crates', 'bench'],
+  rodadero: ['palm', 'umbrella', 'rocks', 'flowers', 'umbrella', 'sign', 'palm', 'bush', 'crates', 'flowers', 'rocks', 'umbrella'],
+  gaira: ['reeds', 'palm', 'fallen-log', 'crates', 'rocks', 'sign', 'flowers', 'bush', 'bench', 'reeds', 'palm', 'rocks'],
+  libano: ['rocks', 'lantern', 'ruins', 'flowers', 'sign', 'bush', 'rocks', 'bench', 'lantern', 'crates', 'flowers', 'ruins'],
+  mamatoco: ['sign', 'rocks', 'crates', 'bush', 'ruins', 'flowers', 'lantern', 'bench', 'rocks', 'sign', 'fallen-log', 'bush'],
+  bonda: ['reeds', 'palm', 'fallen-log', 'rocks', 'flowers', 'crates', 'palm', 'bush', 'bench', 'reeds', 'rocks', 'flowers'],
+  brumalia: ['mushrooms', 'fallen-log', 'flowers', 'rocks', 'bush', 'ruins', 'mushrooms', 'fallen-log', 'lantern', 'flowers', 'rocks', 'bush'],
 };
 const COASTAL_LOCATIONS = new Set<WorldLocationId>(['taganga', 'rodadero', 'gaira']);
 
@@ -153,6 +169,7 @@ const WORLD_ENCOUNTERS: Record<WorldLocationId, WorldEncounter> = {
 
 type EnemyState = {
   id: string;
+  location: WorldLocationId;
   name: string;
   cell: Cell;
   hp: number;
@@ -160,6 +177,9 @@ type EnemyState = {
   color: number;
   model: EnemyModel;
   group: THREE.Group;
+  bow: THREE.Object3D | null;
+  bowString: THREE.Object3D | null;
+  bowArrow: THREE.Object3D | null;
   attackCooldown: number;
   replanTimer: number;
   stepTarget: Cell | null;
@@ -192,13 +212,23 @@ type VisualEffect = {
 type SkillState = {
   cooldown: number;
 };
+type HealingTileState = {
+  id: WorldLocationId;
+  location: WorldLocationId;
+  cell: Cell;
+  group: THREE.Group;
+  glowMaterial: THREE.MeshBasicMaterial;
+};
 
-type NetworkPlayer = { id: string; name: string; x: number; z: number; yaw: number; hp: number; shielding: boolean };
+type NetworkPlayer = { id: string; name: string; x: number; z: number; yaw: number; hp: number; wood: number; shielding: boolean };
 type RemotePlayer = { group: THREE.Group; target: THREE.Vector3; yaw: number };
 const WORLD_LOCATION_IDS: WorldLocationId[] = ['taganga', 'centro', 'rodadero', 'gaira', 'libano', 'mamatoco', 'bonda', 'brumalia'];
 
 function isWorldLocation(value: unknown): value is WorldLocationId {
   return typeof value === 'string' && WORLD_LOCATION_IDS.includes(value as WorldLocationId);
+}
+function isBuildingKind(value: unknown): value is BuildingKind {
+  return value === 'floor' || value === 'wall' || value === 'house' || value === 'campfire';
 }
 
 export class RealtimeGame {
@@ -233,10 +263,41 @@ export class RealtimeGame {
     new THREE.MeshStandardMaterial({ color: 0x47784a, roughness: 0.96, flatShading: true }),
     new THREE.MeshStandardMaterial({ color: 0x527d4d, roughness: 0.96, flatShading: true }),
   ];
+  private readonly landmarkBoxGeometry = new THREE.BoxGeometry(1, 1, 1);
+  private readonly landmarkRockGeometry = new THREE.IcosahedronGeometry(0.72, 0);
+  private readonly landmarkWoodPostGeometry = new THREE.CylinderGeometry(0.09, 0.13, 1, 6);
+  private readonly landmarkReedGeometry = new THREE.CylinderGeometry(0.035, 0.055, 1, 5);
+  private readonly landmarkLeafGeometry = new THREE.ConeGeometry(0.28, 1.35, 5);
+  private readonly landmarkFlowerGeometry = new THREE.SphereGeometry(0.13, 6, 4);
+  private readonly landmarkBarrelGeometry = new THREE.CylinderGeometry(0.36, 0.4, 0.85, 8);
+  private readonly landmarkMushroomStemGeometry = new THREE.CylinderGeometry(0.11, 0.14, 0.34, 7);
+  private readonly landmarkMushroomCapGeometry = new THREE.SphereGeometry(0.27, 8, 5);
+  private readonly landmarkAwningGeometry = new THREE.ConeGeometry(1, 0.42, 8);
+  private readonly landmarkWoodMaterial = new THREE.MeshStandardMaterial({ color: 0x79542f, roughness: 0.92 });
+  private readonly landmarkDarkWoodMaterial = new THREE.MeshStandardMaterial({ color: 0x503b2b, roughness: 0.96 });
+  private readonly landmarkStoneMaterial = new THREE.MeshStandardMaterial({ color: 0x77786a, roughness: 0.98, flatShading: true });
+  private readonly landmarkLeafMaterial = new THREE.MeshStandardMaterial({ color: 0x397344, roughness: 0.95, flatShading: true });
+  private readonly landmarkGrassMaterial = new THREE.MeshStandardMaterial({ color: 0x779653, roughness: 1 });
+  private readonly landmarkFlowerMaterials = [
+    new THREE.MeshStandardMaterial({ color: 0xf0d47b, roughness: 0.72, emissive: 0x392b08 }),
+    new THREE.MeshStandardMaterial({ color: 0xd98ca8, roughness: 0.75 }),
+  ];
+  private readonly landmarkFabricMaterials = [
+    new THREE.MeshStandardMaterial({ color: 0xb94f3c, roughness: 0.92 }),
+    new THREE.MeshStandardMaterial({ color: 0xe4c982, roughness: 0.9 }),
+  ];
+  private readonly landmarkGlowMaterial = new THREE.MeshStandardMaterial({ color: 0xffd37a, emissive: 0xe59a3a, emissiveIntensity: 1.5 });
   private readonly tiles: Array<{ cell: Cell; baseColor: THREE.Color }> = [];
+  private readonly healingTiles: HealingTileState[] = [];
+  private occupiedHealingTile: string | null = null;
   private terrainMesh!: THREE.InstancedMesh;
+  private playerBowVisual!: THREE.Group;
+  private playerBowString!: THREE.Object3D;
+  private playerBowArrow!: THREE.Object3D;
   private readonly forestProps: THREE.Group[] = [];
   private readonly coastalObstacleProps: THREE.Group[] = [];
+  private readonly landmarkCollisionRadii: number[] = [];
+  private readonly landmarkProps: THREE.Group[] = [];
   private readonly enemies: EnemyState[] = [];
   private readonly effects: VisualEffect[] = [];
   private readonly keys = new Set<string>();
@@ -300,6 +361,14 @@ export class RealtimeGame {
   private readonly roomCodeDisplay: HTMLElement;
   private readonly roomMembers: HTMLElement;
   private readonly roomButton: HTMLButtonElement;
+  private readonly woodLabel: HTMLElement;
+  private readonly buildWoodValue: HTMLElement;
+  private readonly buildPanel: HTMLElement;
+  private readonly buildButtons = new Map<BuildingKind, HTMLButtonElement>();
+  private readonly builtStructures: BuildingInstance[] = [];
+  private buildPreview!: THREE.Mesh;
+  private selectedBuilding: BuildingKind | null = null;
+  private woodCount = 0;
 
   constructor(root: HTMLElement) {
     this.root = root;
@@ -327,6 +396,9 @@ export class RealtimeGame {
     this.roomCodeDisplay = this.getElement('#room-code-display');
     this.roomMembers = this.getElement('#room-members');
     this.roomButton = this.getElement<HTMLButtonElement>('#room-button');
+    this.woodLabel = this.getElement('#wood-count');
+    this.buildWoodValue = this.getElement('#build-wood-value');
+    this.buildPanel = this.getElement('#build-panel');
 
     this.renderer = new THREE.WebGLRenderer({ antialias: true, alpha: false });
     this.raycaster.far = ARROW_RANGE;
@@ -346,6 +418,7 @@ export class RealtimeGame {
     this.camera.add(this.shieldVisual);
     this.scene.add(this.camera);
     this.createBow();
+    this.createBuildPreview();
     this.configureCamera();
     this.bindControls();
     this.resize();
@@ -417,6 +490,8 @@ export class RealtimeGame {
       this.createTree(cell);
       this.createCoastalRocks(cell);
     });
+    this.createLandmarks();
+    this.createHealingTiles();
     this.createForestEdge();
   }
 
@@ -426,8 +501,224 @@ export class RealtimeGame {
     tree.position.set(position.x, 0, position.z);
     tree.userData.cell = cell;
     tree.userData.worldLocation = this.locationAtCell(cell);
+    tree.userData.woodTreeId = `${cell.x}:${cell.y}`;
+    tree.children.forEach((part, index) => { part.userData.treeRoot = index === 0; });
     this.forestProps.push(tree);
     this.scene.add(tree);
+  }
+
+  private createBuildPreview(): void {
+    this.buildPreview = new THREE.Mesh(
+      new THREE.BoxGeometry(CELL_SIZE * 0.94, 0.06, CELL_SIZE * 0.94),
+      new THREE.MeshBasicMaterial({ color: 0x65e6a5, transparent: true, opacity: 0.42 }),
+    );
+    this.buildPreview.visible = false;
+    this.scene.add(this.buildPreview);
+  }
+
+  private setTreeHarvestPending(treeId: string, pending: boolean): void {
+    const tree = this.forestProps.find((prop) => prop.userData.woodTreeId === treeId);
+    if (!tree) return;
+    tree.userData.harvestPending = pending;
+    tree.scale.setScalar(pending ? 0.93 : 1);
+  }
+
+  private applyHarvestedTree(treeIdValue: unknown): void {
+    if (typeof treeIdValue !== 'string') return;
+    const tree = this.forestProps.find((prop) => prop.userData.woodTreeId === treeIdValue);
+    if (!tree) return;
+    tree.userData.harvested = true;
+    tree.userData.harvestPending = false;
+    tree.scale.setScalar(1);
+    tree.children.forEach((part) => { part.visible = Boolean(part.userData.treeRoot); });
+    if (!tree.getObjectByName('harvested-stump')) {
+      const stump = new THREE.Mesh(
+        new THREE.CylinderGeometry(0.25, 0.34, 0.48, 8),
+        this.treeRootMaterial,
+      );
+      stump.name = 'harvested-stump';
+      stump.position.y = 0.32;
+      tree.add(stump);
+    }
+  }
+
+  private collectNearbyWood(): void {
+    if (this.phase === 'defeat') return;
+    const nearby = this.forestProps
+      .filter((tree) => tree.visible && tree.userData.woodTreeId && !tree.userData.harvested && !tree.userData.harvestPending)
+      .map((tree) => ({ tree, distance: Math.hypot(tree.position.x - this.camera.position.x, tree.position.z - this.camera.position.z) }))
+      .filter(({ distance }) => distance <= 4.8)
+      .sort((a, b) => a.distance - b.distance)[0]?.tree;
+    if (!nearby) {
+      this.setNotice('Acércate a un árbol para recolectar madera.');
+      return;
+    }
+
+    const treeId = String(nearby.userData.woodTreeId);
+    const position = nearby.position.clone();
+    position.y = 2.1;
+    this.playFloatLabel(position, '+3 MADERA', 0xd9b77a);
+    if (this.roomJoined && this.roomSocket?.readyState === WebSocket.OPEN) {
+      this.setTreeHarvestPending(treeId, true);
+      this.roomSocket.send(JSON.stringify({ type: 'harvest-wood', treeId }));
+      this.setNotice('Recolectando madera…');
+      return;
+    }
+
+    this.woodCount += 3;
+    this.applyHarvestedTree(treeId);
+    this.setNotice('Recolectaste 3 bloques de madera.');
+    this.updateHud();
+  }
+
+  private toggleBuildPanel(): void {
+    if (this.phase === 'defeat') return;
+    if (this.selectedBuilding) {
+      this.selectedBuilding = null;
+      this.root.classList.remove('build-mode');
+      this.buildPreview.visible = false;
+      this.setNotice('Modo construcción cancelado.');
+      this.updateHud();
+      return;
+    }
+    this.keys.clear();
+    if (this.nativePointerLock) document.exitPointerLock();
+    else if (this.pointerLocked) this.releaseCaptureUi();
+    this.lockingMouse = false;
+    this.buildPanel.hidden = !this.buildPanel.hidden;
+  }
+
+  private selectBuilding(kind: BuildingKind): void {
+    const cost = BUILDING_COST[kind];
+    if (this.woodCount < cost) {
+      this.setNotice(`Necesitas ${cost} bloques de madera para construir ${BUILDING_NAME[kind]}.`);
+      return;
+    }
+    this.selectedBuilding = kind;
+    this.buildPanel.hidden = true;
+    this.root.classList.add('build-mode');
+    this.setNotice(`${BUILDING_NAME[kind]} seleccionada. Apunta a una casilla cercana y haz clic para colocarla. Pulsa B para cancelar.`);
+    this.updateHud();
+  }
+
+  private updateBuildingPreview(): void {
+    if (!this.selectedBuilding || !this.worldMap.hidden) {
+      this.buildPreview.visible = false;
+      return;
+    }
+    const cell = this.pickCellAtReticle();
+    if (!cell) {
+      this.buildPreview.visible = false;
+      return;
+    }
+    const position = this.cellToWorld(cell);
+    this.buildPreview.position.set(position.x, 0.18, position.z);
+    const material = this.buildPreview.material as THREE.MeshBasicMaterial;
+    const buildable = this.canBuildAtCell(cell, this.selectedBuilding);
+    material.color.setHex(buildable ? 0x65e6a5 : 0xef786b);
+    this.buildPreview.visible = true;
+  }
+
+  private canBuildAtCell(cell: Cell, kind: BuildingKind): boolean {
+    if (!this.grid.isWalkable(cell.x, cell.y)) return false;
+    if (this.builtStructures.some((building) => building.cell.x === cell.x && building.cell.y === cell.y)) return false;
+    if (this.healingTiles.some((tile) => tile.cell.x === cell.x && tile.cell.y === cell.y)) return false;
+    if (this.enemies.some((enemy) => enemy.hp > 0 && Math.hypot(enemy.cell.x - cell.x, enemy.cell.y - cell.y) < 1.5)) return false;
+    const target = this.cellToWorld(cell);
+    if (Math.hypot(target.x - this.camera.position.x, target.z - this.camera.position.z) > 13) return false;
+    if (this.landmarkProps.some((prop) => Math.hypot(prop.position.x - target.x, prop.position.z - target.z) < 1.55)) return false;
+    if (kind === 'floor' && this.isCellBlockedByBuilding(cell)) return false;
+    return true;
+  }
+
+  private placeSelectedBuilding(cell: Cell): void {
+    const kind = this.selectedBuilding;
+    if (!kind) return;
+    if (!this.canBuildAtCell(cell, kind)) {
+      this.setNotice('Esa casilla no está libre o queda demasiado lejos.');
+      return;
+    }
+    const cost = BUILDING_COST[kind];
+    if (this.woodCount < cost) {
+      this.setNotice(`Te faltan bloques de madera para construir ${BUILDING_NAME[kind]}.`);
+      return;
+    }
+    if (this.roomJoined && this.roomSocket?.readyState === WebSocket.OPEN) {
+      this.roomSocket.send(JSON.stringify({ type: 'place-building', kind, cell }));
+      this.setNotice('Enviando construcción a la sala…');
+      return;
+    }
+
+    this.woodCount -= cost;
+    this.addBuilding({ id: `local-${Date.now()}-${Math.floor(Math.random() * 100000)}`, kind, cell });
+    this.setNotice(`${BUILDING_NAME[kind]} construida por ${cost} bloques de madera.`);
+    this.updateHud();
+    if (this.woodCount < cost) {
+      this.selectedBuilding = null;
+      this.root.classList.remove('build-mode');
+    }
+  }
+
+  private addBuilding(record: BuildingRecord): void {
+    if (!record || typeof record.id !== 'string' || !isBuildingKind(record.kind)
+      || !Number.isInteger(record.cell?.x) || !Number.isInteger(record.cell?.y)) return;
+    if (this.builtStructures.some((building) => building.id === record.id
+      || (building.cell.x === record.cell.x && building.cell.y === record.cell.y))) return;
+    const group = this.createBuildingModel(record.kind);
+    const position = this.cellToWorld(record.cell);
+    group.position.set(position.x, 0, position.z);
+    group.userData.buildingId = record.id;
+    this.scene.add(group);
+    this.builtStructures.push({ ...record, cell: { ...record.cell }, group });
+  }
+
+  private createBuildingModel(kind: BuildingKind): THREE.Group {
+    const group = new THREE.Group();
+    const addBox = (position: [number, number, number], scale: [number, number, number], material = this.landmarkWoodMaterial, rotationZ = 0): void => {
+      const mesh = new THREE.Mesh(this.landmarkBoxGeometry, material);
+      mesh.position.set(...position);
+      mesh.scale.set(...scale);
+      mesh.rotation.z = rotationZ;
+      group.add(mesh);
+    };
+
+    if (kind === 'floor') {
+      addBox([0, 0.1, 0], [CELL_SIZE * 0.92, 0.18, CELL_SIZE * 0.92]);
+      for (let index = -1; index <= 1; index++) addBox([index * 0.68, 0.2, 0], [0.045, 0.025, CELL_SIZE * 0.86], this.landmarkDarkWoodMaterial);
+    } else if (kind === 'wall') {
+      for (let row = 0; row < 4; row++) addBox([0, 0.28 + row * 0.38, 0], [CELL_SIZE * 0.92, 0.34, 0.22]);
+      addBox([0, 1.05, 0.13], [CELL_SIZE * 0.92, 0.08, 0.08], this.landmarkDarkWoodMaterial);
+    } else if (kind === 'house') {
+      addBox([0, 0.12, 0], [2.1, 0.2, 2.05]);
+      addBox([0, 1.03, -0.87], [2, 1.72, 0.2]);
+      addBox([-0.91, 1.03, 0], [0.18, 1.72, 1.75]);
+      addBox([0.91, 1.03, 0], [0.18, 1.72, 1.75]);
+      addBox([0, 1.03, 0.87], [0.72, 1.72, 0.2], this.landmarkDarkWoodMaterial);
+      addBox([-0.58, 2.03, 0], [1.25, 0.18, 2.4], this.landmarkFabricMaterials[1], -0.53);
+      addBox([0.58, 2.03, 0], [1.25, 0.18, 2.4], this.landmarkFabricMaterials[1], 0.53);
+    } else {
+      for (let stone = 0; stone < 7; stone++) {
+        const angle = (stone / 7) * Math.PI * 2;
+        const rock = new THREE.Mesh(this.landmarkRockGeometry, this.landmarkStoneMaterial);
+        rock.position.set(Math.cos(angle) * 0.58, 0.2, Math.sin(angle) * 0.58);
+        rock.scale.set(0.48, 0.3, 0.48);
+        group.add(rock);
+      }
+      for (const side of [-1, 1]) addBox([side * 0.32, 0.22, 0], [1.05, 0.14, 0.16], this.landmarkDarkWoodMaterial, side * 0.38);
+      const flame = new THREE.Mesh(this.landmarkFlowerGeometry, this.landmarkGlowMaterial);
+      flame.name = 'campfire-flame';
+      flame.position.y = 0.5;
+      flame.scale.set(0.68, 1.25, 0.68);
+      group.add(flame);
+    }
+    return group;
+  }
+
+  private isCellBlockedByBuilding(cell: Cell): boolean {
+    return this.builtStructures.some((building) =>
+      (building.kind === 'wall' || building.kind === 'house')
+      && building.cell.x === cell.x && building.cell.y === cell.y,
+    );
   }
 
   private createCoastalRocks(cell: Cell): void {
@@ -451,6 +742,284 @@ export class RealtimeGame {
     }
     this.coastalObstacleProps.push(group);
     this.scene.add(group);
+  }
+
+  private createLandmarks(): void {
+    const blocked = new Set(OBSTACLES.map(([x, y]) => `${x},${y}`));
+    const enemyCells = WORLD_LOCATION_IDS.flatMap((location) => WORLD_ENCOUNTERS[location].enemies.map((enemy) => {
+      const center = WORLD_CENTERS[location];
+      return { x: center.x + enemy.cell.x - 1, y: center.y + enemy.cell.y - 1 };
+    }));
+
+    WORLD_LOCATION_IDS.forEach((location) => {
+      const center = WORLD_CENTERS[location];
+      const quadrants: Array<Array<{ cell: Cell; score: number }>> = [[], [], [], []];
+      for (let y = Math.max(1, center.y - 14); y <= Math.min(GRID_HEIGHT - 2, center.y + 14); y++) {
+        for (let x = Math.max(1, center.x - 14); x <= Math.min(GRID_WIDTH - 2, center.x + 14); x++) {
+          const cell = { x, y };
+          const distance = Math.hypot(x - center.x, y - center.y);
+          if (distance < 5.2 || distance > 13 || this.locationAtCell(cell) !== location) continue;
+          if (distanceToWorldRoute(x, y) < 3.8 || blocked.has(`${x},${y}`) || !this.grid.isWalkable(x, y)) continue;
+          if (enemyCells.some((enemy) => Math.hypot(x - enemy.x, y - enemy.y) < 3.4)) continue;
+          const quadrant = (x >= center.x ? 1 : 0) + (y >= center.y ? 2 : 0);
+          const hash = ((x * 73856093) ^ (y * 19349663)) >>> 0;
+          const score = Math.abs(distance - 8.8) + (hash % 1000) / 1000 * 2.2;
+          quadrants[quadrant].push({ cell, score });
+        }
+      }
+
+      const sites = quadrants.flatMap((quadrant) =>
+        quadrant.sort((a, b) => a.score - b.score).slice(0, 3).map((entry) => entry.cell),
+      );
+      const kinds = WORLD_LANDMARKS[location];
+      sites.forEach((cell, index) => this.createLandmark(location, kinds[index % kinds.length], cell, index));
+    });
+  }
+
+  private createLandmark(location: WorldLocationId, kind: LandmarkKind, cell: Cell, variant: number): void {
+    const group = new THREE.Group();
+    const random = (variant * 47 + cell.x * 19 + cell.y * 31) % 11;
+    const add = (
+      geometry: THREE.BufferGeometry,
+      material: THREE.Material,
+      position: [number, number, number],
+      scale: [number, number, number] = [1, 1, 1],
+      rotation: [number, number, number] = [0, 0, 0],
+    ): THREE.Mesh => {
+      const mesh = new THREE.Mesh(geometry, material);
+      mesh.position.set(...position);
+      mesh.scale.set(...scale);
+      mesh.rotation.set(...rotation);
+      group.add(mesh);
+      return mesh;
+    };
+    const box = (material: THREE.Material, position: [number, number, number], scale: [number, number, number]): THREE.Mesh =>
+      add(this.landmarkBoxGeometry, material, position, scale);
+
+    if (kind === 'palm') {
+      add(this.treeTrunkGeometry, this.treeBarkMaterial, [0, 1.95, 0], [0.67, 1.22, 0.67], [0, 0, (random - 5) * 0.025]);
+      for (let leaf = 0; leaf < 7; leaf++) {
+        const angle = (leaf / 7) * Math.PI * 2;
+        add(this.landmarkLeafGeometry, this.landmarkLeafMaterial,
+          [Math.cos(angle) * 0.48, 3.72 + (leaf % 2) * 0.08, Math.sin(angle) * 0.48],
+          [1.05, 0.9, 0.72], [Math.sin(angle) * 0.82, 0, -Math.cos(angle) * 0.82]);
+      }
+    } else if (kind === 'rocks') {
+      for (let rock = 0; rock < 4; rock++) {
+        const angle = (rock / 4) * Math.PI * 2;
+        add(this.landmarkRockGeometry, this.landmarkStoneMaterial,
+          [Math.cos(angle) * 0.62, 0.34 + (rock % 2) * 0.1, Math.sin(angle) * 0.48],
+          [0.72 + (random % 4) * 0.08, 0.55 + (rock % 2) * 0.15, 0.7]);
+      }
+    } else if (kind === 'flowers') {
+      for (let flower = 0; flower < 5; flower++) {
+        const x = ((flower % 3) - 1) * 0.34;
+        const z = (Math.floor(flower / 3) - 0.5) * 0.42;
+        add(this.landmarkReedGeometry, this.landmarkGrassMaterial, [x, 0.3, z], [0.55, 0.48 + (flower % 2) * 0.16, 0.55]);
+        add(this.landmarkFlowerGeometry, this.landmarkFlowerMaterials[flower % 2], [x, 0.62 + (flower % 2) * 0.07, z], [1, 0.82, 1]);
+      }
+    } else if (kind === 'market') {
+      for (const x of [-1, 1]) for (const z of [-0.56, 0.56]) {
+        box(this.landmarkWoodMaterial, [x, 0.86, z], [0.13, 1.72, 0.13]);
+      }
+      box(this.landmarkFabricMaterials[variant % 2], [0, 1.75, 0], [2.35, 0.18, 1.45]);
+      box(this.landmarkFabricMaterials[(variant + 1) % 2], [0, 0.62, 0.34], [1.6, 0.16, 0.7]);
+      box(this.landmarkWoodMaterial, [-0.57, 0.29, 0.24], [0.48, 0.52, 0.48]);
+      box(this.landmarkDarkWoodMaterial, [0.55, 0.29, 0.2], [0.48, 0.52, 0.48]);
+    } else if (kind === 'lantern') {
+      add(this.landmarkWoodPostGeometry, this.landmarkDarkWoodMaterial, [0, 1.38, 0], [0.76, 2.76, 0.76]);
+      box(this.landmarkDarkWoodMaterial, [0, 2.7, 0], [0.48, 0.12, 0.48]);
+      add(this.landmarkFlowerGeometry, this.landmarkGlowMaterial, [0, 2.94, 0], [0.88, 1.4, 0.88]);
+      box(this.landmarkDarkWoodMaterial, [0, 3.15, 0], [0.55, 0.1, 0.55]);
+    } else if (kind === 'bench') {
+      box(this.landmarkWoodMaterial, [0, 0.56, 0], [1.6, 0.16, 0.52]);
+      box(this.landmarkDarkWoodMaterial, [0, 0.94, -0.19], [1.6, 0.64, 0.12]);
+      for (const x of [-0.58, 0.58]) {
+        box(this.landmarkDarkWoodMaterial, [x, 0.29, 0], [0.13, 0.58, 0.18]);
+      }
+    } else if (kind === 'reeds') {
+      for (let reed = 0; reed < 7; reed++) {
+        const angle = reed * 2.4;
+        const height = 0.85 + (reed % 3) * 0.22;
+        add(this.landmarkReedGeometry, reed % 3 === 0 ? this.landmarkGrassMaterial : this.landmarkLeafMaterial,
+          [Math.cos(angle) * 0.48, height / 2, Math.sin(angle) * 0.48],
+          [1, height, 1], [Math.sin(angle) * 0.13, 0, Math.cos(angle) * 0.13]);
+      }
+    } else if (kind === 'fallen-log') {
+      add(this.landmarkBarrelGeometry, this.landmarkWoodMaterial, [0, 0.34, 0], [0.82, 3.1, 0.82], [0, 0, Math.PI / 2]);
+      for (const x of [-0.82, 0.82]) add(this.landmarkRockGeometry, this.landmarkLeafMaterial, [x, 0.22, 0.24], [0.55, 0.35, 0.62]);
+    } else if (kind === 'mushrooms') {
+      for (let mushroom = 0; mushroom < 4; mushroom++) {
+        const x = ((mushroom % 2) - 0.5) * 0.56;
+        const z = (Math.floor(mushroom / 2) - 0.5) * 0.52;
+        const height = 0.36 + (mushroom % 2) * 0.15;
+        add(this.landmarkMushroomStemGeometry, this.landmarkFabricMaterials[1], [x, height / 2, z], [0.75, height / 0.34, 0.75]);
+        add(this.landmarkMushroomCapGeometry, this.landmarkFabricMaterials[mushroom % 2], [x, height + 0.08, z], [1.1, 0.56, 1.1]);
+      }
+    } else if (kind === 'umbrella') {
+      add(this.landmarkWoodPostGeometry, this.landmarkDarkWoodMaterial, [0, 1.05, 0], [0.34, 2.1, 0.34]);
+      add(this.landmarkAwningGeometry, this.landmarkFabricMaterials[variant % 2], [0, 2.18, 0], [1.45, 0.95, 1.45]);
+      box(this.landmarkWoodMaterial, [0.72, 0.28, 0], [0.65, 0.1, 0.6]);
+    } else if (kind === 'crates') {
+      box(this.landmarkWoodMaterial, [-0.34, 0.42, 0], [0.78, 0.78, 0.78]);
+      box(this.landmarkDarkWoodMaterial, [0.35, 0.34, 0.05], [0.72, 0.62, 0.72]);
+      box(this.landmarkWoodMaterial, [-0.26, 1.12, 0], [0.58, 0.58, 0.58]);
+    } else if (kind === 'sign') {
+      add(this.landmarkWoodPostGeometry, this.landmarkDarkWoodMaterial, [0, 0.94, 0], [0.72, 1.88, 0.72]);
+      box(this.landmarkWoodMaterial, [0, 2, 0], [1.4, 0.56, 0.16]);
+      box(this.landmarkFabricMaterials[1], [0, 2, 0.1], [1.05, 0.08, 0.035]);
+    } else if (kind === 'ruins') {
+      for (const x of [-0.78, 0, 0.78]) {
+        add(this.landmarkRockGeometry, this.landmarkStoneMaterial, [x, 0.8, 0], [0.78, 1.15 + (x === 0 ? 0.25 : 0), 0.82]);
+      }
+      box(this.landmarkStoneMaterial, [0, 1.72, 0], [2.2, 0.3, 0.62]);
+    } else {
+      for (let leaf = 0; leaf < 5; leaf++) {
+        const angle = (leaf / 5) * Math.PI * 2;
+        add(this.treeLeafGeometry, this.landmarkLeafMaterial,
+          [Math.cos(angle) * 0.4, 0.58 + (leaf % 2) * 0.15, Math.sin(angle) * 0.36],
+          [0.72, 0.65, 0.68]);
+      }
+    }
+
+    const position = this.cellToWorld(cell);
+    group.position.set(position.x, 0, position.z);
+    group.rotation.y = random * 0.57;
+    group.userData.worldLocation = location;
+    group.userData.landmark = kind;
+    this.landmarkProps.push(group);
+    this.landmarkCollisionRadii.push(this.getLandmarkCollisionRadius(kind));
+    this.scene.add(group);
+  }
+
+  private getLandmarkCollisionRadius(kind: LandmarkKind): number {
+    if (kind === 'flowers' || kind === 'reeds' || kind === 'mushrooms' || kind === 'bush') return 0;
+    if (kind === 'market' || kind === 'ruins') return 1.2;
+    if (kind === 'fallen-log') return 1.05;
+    if (kind === 'bench' || kind === 'umbrella' || kind === 'crates') return 0.88;
+    return 0.72;
+  }
+
+  private createHealingTiles(): void {
+    const enemyCells = WORLD_LOCATION_IDS.flatMap((location) => WORLD_ENCOUNTERS[location].enemies.map((enemy) => {
+      const center = WORLD_CENTERS[location];
+      return { x: center.x + enemy.cell.x - 1, y: center.y + enemy.cell.y - 1 };
+    }));
+
+    WORLD_LOCATION_IDS.forEach((location) => {
+      const center = WORLD_CENTERS[location];
+      const candidates: Array<{ cell: Cell; score: number }> = [];
+      for (let y = center.y - 4; y <= center.y + 4; y++) {
+        for (let x = center.x - 4; x <= center.x + 4; x++) {
+          const cell = { x, y };
+          const distance = Math.hypot(x - center.x, y - center.y);
+          if (distance < 2.2 || distance > 4 || this.locationAtCell(cell) !== location) continue;
+          if (!this.grid.isWalkable(x, y) || distanceToWorldRoute(x, y) < 1.8) continue;
+          if (enemyCells.some((enemy) => Math.hypot(x - enemy.x, y - enemy.y) < 2.8)) continue;
+          candidates.push({ cell, score: Math.abs(distance - 3.2) + (x * 31 + y * 17) % 7 * 0.035 });
+        }
+      }
+
+      candidates.sort((a, b) => a.score - b.score);
+      const cell = candidates[0]?.cell ?? { x: center.x + 2, y: center.y + 2 };
+      const group = new THREE.Group();
+      const base = new THREE.Mesh(
+        new THREE.CylinderGeometry(0.88, 0.94, 0.12, 24),
+        new THREE.MeshStandardMaterial({ color: 0x254a38, roughness: 0.75, metalness: 0.12 }),
+      );
+      base.position.y = 0.08;
+      group.add(base);
+
+      const glowMaterial = new THREE.MeshBasicMaterial({ color: 0x70f0ae, transparent: true, opacity: 0.72, side: THREE.DoubleSide });
+      const ring = new THREE.Mesh(new THREE.RingGeometry(0.65, 0.78, 28), glowMaterial);
+      ring.rotation.x = -Math.PI / 2;
+      ring.position.y = 0.16;
+      group.add(ring);
+
+      const crossVertical = new THREE.Mesh(new THREE.BoxGeometry(0.18, 0.045, 0.62), glowMaterial);
+      crossVertical.position.y = 0.17;
+      group.add(crossVertical);
+      const crossHorizontal = new THREE.Mesh(new THREE.BoxGeometry(0.62, 0.045, 0.18), glowMaterial);
+      crossHorizontal.position.y = 0.17;
+      group.add(crossHorizontal);
+
+      const position = this.cellToWorld(cell);
+      group.position.set(position.x, 0, position.z);
+      group.userData.healingTile = location;
+      this.scene.add(group);
+      this.healingTiles.push({ id: location, location, cell, group, glowMaterial });
+    });
+  }
+
+  private checkHealingTile(cell: Cell): void {
+    const tile = this.healingTiles.find((candidate) =>
+      candidate.location === this.currentLocation && candidate.cell.x === cell.x && candidate.cell.y === cell.y,
+    );
+    if (!tile) {
+      this.occupiedHealingTile = null;
+      return;
+    }
+
+    const id = tile.id;
+    if (this.occupiedHealingTile === id) return;
+    this.occupiedHealingTile = id;
+    if (this.playerHp >= this.playerMaxHp) {
+      this.setNotice('Casilla de curación: tu salud ya está completa.');
+      return;
+    }
+
+    const restored = Math.min(35, this.playerMaxHp - this.playerHp);
+    this.playerHp += restored;
+    const position = this.cellToWorld(tile.cell);
+    position.y = 1.2;
+    this.playRing(position, 0x70f0ae);
+    this.playFloatLabel(position.clone().add(new THREE.Vector3(0, 0.5, 0)), `+${restored} PV`, 0x70f0ae);
+    this.relocateHealingTile(tile);
+    this.setNotice(`Recuperaste ${restored} PV. La casilla verde apareció en otro punto del mapa.`);
+    this.updateHud();
+  }
+
+  private relocateHealingTile(tile: HealingTileState): void {
+    const current = this.worldToCell(this.camera.position.x, this.camera.position.z);
+    const candidates: Cell[] = [];
+    for (let y = 2; y < GRID_HEIGHT - 2; y++) {
+      for (let x = 2; x < GRID_WIDTH - 2; x++) {
+        const cell = { x, y };
+        if (!this.grid.isWalkable(x, y)) continue;
+        if (this.healingTiles.some((other) => other !== tile && Math.hypot(other.cell.x - x, other.cell.y - y) < 5)) continue;
+        if (Math.hypot(x - current.x, y - current.y) < 8) continue;
+        if (distanceToWorldRoute(x, y) < 2.8) continue;
+        if (this.enemies.some((enemy) => enemy.hp > 0 && Math.hypot(enemy.cell.x - x, enemy.cell.y - y) < 3.2)) continue;
+        const position = this.cellToWorld(cell);
+        if (this.landmarkProps.some((prop) => Math.hypot(prop.position.x - position.x, prop.position.z - position.z) < 2.4)) continue;
+        candidates.push(cell);
+      }
+    }
+    if (candidates.length === 0) return;
+    const cell = candidates[Math.floor(Math.random() * candidates.length)];
+    this.applyHealingTileMove(tile.id, cell, true);
+    if (this.roomJoined && this.roomSocket?.readyState === WebSocket.OPEN) {
+      this.roomSocket.send(JSON.stringify({ type: 'healing-tile-moved', tileId: tile.id, cell }));
+    }
+  }
+
+  private applyHealingTileMove(tileId: unknown, cellValue: unknown, showEffect = false): void {
+    if (!isWorldLocation(tileId) || !cellValue || typeof cellValue !== 'object') return;
+    const cell = cellValue as Cell;
+    if (!Number.isInteger(cell.x) || !Number.isInteger(cell.y) || !this.grid.isWalkable(cell.x, cell.y)) return;
+    const tile = this.healingTiles.find((candidate) => candidate.id === tileId);
+    if (!tile) return;
+    if (this.healingTiles.some((other) => other !== tile && other.cell.x === cell.x && other.cell.y === cell.y)) return;
+    tile.cell = { x: cell.x, y: cell.y };
+    tile.location = this.locationAtCell(tile.cell);
+    const position = this.cellToWorld(tile.cell);
+    tile.group.position.set(position.x, 0, position.z);
+    tile.group.userData.worldLocation = tile.location;
+    this.occupiedHealingTile = null;
+    if (showEffect) {
+      position.y = 0.55;
+      this.playRing(position, 0x70f0ae);
+    }
   }
 
   private applyLocationAppearance(location: WorldLocationId): void {
@@ -535,41 +1104,47 @@ export class RealtimeGame {
   }
 
   private createEnemies(): void {
-    const definitions = WORLD_ENCOUNTERS[this.currentLocation].enemies;
-
-    definitions.forEach((definition, index) => {
-      const center = WORLD_CENTERS[this.currentLocation];
-      const cell = { x: center.x + definition.cell.x - 1, y: center.y + definition.cell.y - 1 };
-      const group = definition.model === 'crab'
-        ? this.createCrab(definition.color, index)
-        : this.createMaskedArcher(definition.color, index);
-      const position = this.cellToWorld(cell);
-      group.position.set(position.x, 0, position.z);
-      group.userData.enemyId = definition.id;
-      this.scene.add(group);
-      this.enemies.push({
-        ...definition,
-        cell,
-        maxHp: definition.hp,
-        group,
-        attackCooldown: 1.3 + index * 0.35,
-        replanTimer: 0,
-        stepTarget: null,
-        stepElapsed: 0,
-        stepStart: new THREE.Vector3(),
-        stepEnd: new THREE.Vector3(),
-        slowTimer: 0,
-        lastKnownPlayerCell: { ...this.playerCell },
-        lastSeenTimer: 0,
-        searchTimer: 0,
-        searchTarget: null,
-        patrolTarget: null,
-        needsCover: false,
-        coverTarget: null,
-        coverPath: [],
-        coverCooldown: 0,
-        coverTimer: 0,
-        isHiding: false,
+    WORLD_LOCATION_IDS.forEach((location, locationIndex) => {
+      WORLD_ENCOUNTERS[location].enemies.forEach((definition, index) => {
+        const center = WORLD_CENTERS[location];
+        const cell = { x: center.x + definition.cell.x - 1, y: center.y + definition.cell.y - 1 };
+        const variant = locationIndex * 4 + index;
+        const group = definition.model === 'crab'
+          ? this.createCrab(definition.color, variant)
+          : this.createMaskedArcher(definition.color, variant);
+        const position = this.cellToWorld(cell);
+        group.position.set(position.x, 0, position.z);
+        group.userData.enemyId = definition.id;
+        group.userData.worldLocation = location;
+        this.scene.add(group);
+        this.enemies.push({
+          ...definition,
+          location,
+          cell,
+          maxHp: definition.hp,
+          group,
+          bow: group.getObjectByName('enemy-bow') ?? null,
+          bowString: group.getObjectByName('enemy-bow-string') ?? null,
+          bowArrow: group.getObjectByName('enemy-bow-arrow') ?? null,
+          attackCooldown: 1.3 + index * 0.35,
+          replanTimer: 0,
+          stepTarget: null,
+          stepElapsed: 0,
+          stepStart: new THREE.Vector3(),
+          stepEnd: new THREE.Vector3(),
+          slowTimer: 0,
+          lastKnownPlayerCell: { ...cell },
+          lastSeenTimer: 6,
+          searchTimer: 0,
+          searchTarget: null,
+          patrolTarget: null,
+          needsCover: false,
+          coverTarget: null,
+          coverPath: [],
+          coverCooldown: 0,
+          coverTimer: 0,
+          isHiding: false,
+        });
       });
     });
   }
@@ -768,6 +1343,7 @@ export class RealtimeGame {
     bow.position.set(0.65, 1.01, 0.22);
     bow.rotation.z = Math.PI / 2;
     bow.userData.bow = true;
+    bow.name = 'enemy-bow';
     archer.add(bow);
 
     const bowstring = new THREE.Mesh(
@@ -775,7 +1351,17 @@ export class RealtimeGame {
       new THREE.MeshStandardMaterial({ color: 0xe8dbc0 }),
     );
     bowstring.position.set(0.47, 1.01, 0.22);
+    bowstring.name = 'enemy-bow-string';
     archer.add(bowstring);
+    const drawnArrow = new THREE.Mesh(
+      new THREE.CylinderGeometry(0.014, 0.014, 0.78, 5),
+      new THREE.MeshStandardMaterial({ color: 0xe8dbc0, roughness: 0.78 }),
+    );
+    drawnArrow.name = 'enemy-bow-arrow';
+    drawnArrow.position.set(0.47, 1.01, 0.28);
+    drawnArrow.rotation.x = Math.PI / 2;
+    drawnArrow.visible = false;
+    archer.add(drawnArrow);
 
     const quiver = new THREE.Mesh(new THREE.CylinderGeometry(0.11, 0.14, 0.58, 7), leatherMaterial);
     quiver.position.set(-0.25, 1.42, -0.22);
@@ -808,6 +1394,7 @@ export class RealtimeGame {
 
   private createBow(): void {
     const bow = new THREE.Group();
+    bow.name = 'player-bow';
     const wood = new THREE.MeshStandardMaterial({ color: 0xb98a4a, roughness: 0.65 });
     const string = new THREE.MeshStandardMaterial({ color: 0xf2e5c4, roughness: 0.8 });
 
@@ -816,6 +1403,7 @@ export class RealtimeGame {
     bow.add(arc);
     const bowString = new THREE.Mesh(new THREE.CylinderGeometry(0.006, 0.006, 0.53, 5), string);
     bowString.position.x = -0.18;
+    bowString.name = 'player-bow-string';
     bow.add(bowString);
     const grip = new THREE.Mesh(new THREE.CylinderGeometry(0.035, 0.035, 0.17, 8), wood);
     grip.rotation.z = Math.PI / 2;
@@ -823,6 +1411,18 @@ export class RealtimeGame {
 
     bow.position.set(0.52, -0.43, -0.86);
     bow.rotation.z = -0.12;
+    const arrow = new THREE.Mesh(
+      new THREE.CylinderGeometry(0.012, 0.012, 0.92, 5),
+      new THREE.MeshStandardMaterial({ color: 0xf1d28c, roughness: 0.75 }),
+    );
+    arrow.name = 'player-bow-arrow';
+    arrow.position.set(-0.18, 0, -0.06);
+    arrow.rotation.x = -Math.PI / 2;
+    arrow.visible = false;
+    bow.add(arrow);
+    this.playerBowVisual = bow;
+    this.playerBowString = bowString;
+    this.playerBowArrow = arrow;
     this.camera.add(bow);
   }
 
@@ -872,12 +1472,18 @@ export class RealtimeGame {
       this.skillButtons.set(skill, button);
       button.addEventListener('click', () => this.selectSkill(skill));
     });
+    this.root.querySelectorAll<HTMLButtonElement>('[data-build]').forEach((button) => {
+      const kind = button.dataset.build as BuildingKind;
+      this.buildButtons.set(kind, button);
+      button.addEventListener('click', () => this.selectBuilding(kind));
+    });
     this.root.querySelectorAll<HTMLButtonElement>('[data-world-location]').forEach((button) => {
       const location = button.dataset.worldLocation as WorldLocationId;
       this.mapLocationButtons.set(location, button);
       button.addEventListener('click', () => this.selectWorldLocation(location));
     });
     this.getElement<HTMLButtonElement>('#close-map').addEventListener('click', () => this.closeWorldMap());
+    this.getElement<HTMLButtonElement>('#close-build').addEventListener('click', () => { this.buildPanel.hidden = true; });
     this.roomButton.addEventListener('click', () => { this.roomLobby.hidden = false; });
     this.getElement<HTMLButtonElement>('#close-room').addEventListener('click', () => { this.roomLobby.hidden = true; });
     this.getElement<HTMLButtonElement>('#create-room').addEventListener('click', () => this.connectToRoom('create-room'));
@@ -917,12 +1523,29 @@ export class RealtimeGame {
         this.roomConnected.hidden = false;
         this.roomButton.textContent = `SALA · ${this.roomCode}`;
         this.roomStatus.textContent = 'Conectados en la misma sala.';
+        const sharedHealingTiles = Array.isArray(message.healingTiles)
+          ? message.healingTiles as Array<{ tileId: unknown; cell: unknown }>
+          : [];
+        sharedHealingTiles.forEach((entry) => {
+          if (entry && typeof entry === 'object') this.applyHealingTileMove(entry.tileId, entry.cell);
+        });
+        if (Array.isArray(message.harvestedTrees)) message.harvestedTrees.forEach((id) => this.applyHarvestedTree(id));
+        if (Array.isArray(message.buildings)) {
+          message.buildings.forEach((building) => {
+            if (building && typeof building === 'object') this.addBuilding(building as BuildingRecord);
+          });
+        }
+        this.roomSocket?.send(JSON.stringify({
+          type: 'healing-tiles-sync',
+          tiles: this.healingTiles.map((tile) => ({ tileId: tile.id, cell: tile.cell })),
+        }));
         if (isWorldLocation(message.location) && message.location !== this.currentLocation) {
           this.enterLocation(message.location, false);
         }
         const players = Array.isArray(message.players) ? message.players as NetworkPlayer[] : [];
         players.forEach((player) => {
           if (player.id === this.localPlayerId) {
+            this.woodCount = Number.isFinite(player.wood) ? player.wood : 0;
             this.camera.position.set(player.x, PLAYER_HEIGHT, player.z);
             this.yaw = player.yaw;
             this.playerCell.x = this.worldToCell(player.x, player.z).x;
@@ -931,6 +1554,7 @@ export class RealtimeGame {
           } else this.addRemotePlayer(player);
         });
         this.updateRoomMembers(players.length);
+        this.updateHud();
       } else if (message.type === 'player-joined') {
         const player = message.player as NetworkPlayer;
         if (player?.id && player.id !== this.localPlayerId) this.addRemotePlayer(player);
@@ -942,6 +1566,33 @@ export class RealtimeGame {
       } else if (message.type === 'player-left') {
         this.removeRemotePlayer(String(message.playerId || ''));
         this.updateRoomMembers(this.remotePlayers.size + 1);
+      } else if (message.type === 'healing-tile-moved') {
+        this.applyHealingTileMove(message.tileId, message.cell, true);
+      } else if (message.type === 'wood-collected' || message.type === 'tree-harvested') {
+        this.applyHarvestedTree(message.treeId);
+        if (message.playerId === this.localPlayerId && Number.isFinite(message.wood)) {
+          this.woodCount = Number(message.wood);
+          this.updateHud();
+        }
+      } else if (message.type === 'wood-harvest-denied') {
+        this.setTreeHarvestPending(String(message.treeId || ''), false);
+        this.setNotice('Acércate más al árbol para recoger la madera.');
+      } else if (message.type === 'building-placed') {
+        if (message.building && typeof message.building === 'object') this.addBuilding(message.building as BuildingRecord);
+        if (message.builderId === this.localPlayerId && Number.isFinite(message.wood)) {
+          this.woodCount = Number(message.wood);
+          const kind = message.building && typeof message.building === 'object'
+            ? (message.building as BuildingRecord).kind
+            : null;
+          if (this.selectedBuilding && kind && this.woodCount < BUILDING_COST[kind]) {
+            this.selectedBuilding = null;
+            this.root.classList.remove('build-mode');
+          }
+          this.setNotice(kind ? `${BUILDING_NAME[kind]} construida.` : 'Construcción colocada.');
+          this.updateHud();
+        }
+      } else if (message.type === 'build-error') {
+        this.setNotice(String(message.message || 'No se pudo colocar la construcción.'));
       } else if (message.type === 'room-left') {
         this.roomStatus.textContent = 'Saliste de la sala.';
       }
@@ -1042,6 +1693,10 @@ export class RealtimeGame {
   private readonly onMouseDown = (event: MouseEvent): void => {
     if (event.button !== 0) return;
     if (!this.pointerLocked) {
+      if (this.selectedBuilding) {
+        this.handleFire();
+        return;
+      }
       if (this.lockingMouse) return;
       this.lockingMouse = true;
       try {
@@ -1142,12 +1797,32 @@ export class RealtimeGame {
   private readonly onContextMenu = (event: MouseEvent): void => event.preventDefault();
 
   private readonly onKeyDown = (event: KeyboardEvent): void => {
+    if (event.code === 'Escape' && this.selectedBuilding) {
+      this.selectedBuilding = null;
+      this.root.classList.remove('build-mode');
+      this.buildPreview.visible = false;
+      this.setNotice('Modo construcción cancelado.');
+      this.updateHud();
+      return;
+    }
+    if (event.code === 'Escape' && !this.buildPanel.hidden) {
+      this.buildPanel.hidden = true;
+      return;
+    }
     if (event.code === 'Escape' && !this.worldMap.hidden) {
       this.closeWorldMap();
       return;
     }
     if (event.code === 'KeyM') {
       if (!event.repeat) this.toggleWorldMap();
+      return;
+    }
+    if (event.code === 'KeyB') {
+      if (!event.repeat) this.toggleBuildPanel();
+      return;
+    }
+    if (event.code === 'KeyE') {
+      if (!event.repeat) this.collectNearbyWood();
       return;
     }
     if (event.code === 'Escape' && this.pointerLocked) {
@@ -1228,8 +1903,6 @@ export class RealtimeGame {
       return;
     }
 
-    this.clearTransientEffects();
-    this.clearEnemies();
     this.currentLocation = location;
     this.locationLabel.textContent = location === 'brumalia' ? 'EL BOSQUE DE' : this.mapLocationButtons.get(location)?.textContent?.trim().toUpperCase() ?? '';
     this.mapLocationTitle.textContent = this.mapLocationButtons.get(location)?.textContent?.trim() ?? '';
@@ -1239,9 +1912,7 @@ export class RealtimeGame {
     this.scene.background = new THREE.Color(encounter.background);
     if (this.scene.fog instanceof THREE.Fog) this.scene.fog.color.setHex(encounter.background);
     (this.ground.material as THREE.MeshStandardMaterial).color.setHex(encounter.ground);
-    this.createEnemies();
-    this.enemies.forEach((enemy) => this.setEnemyCombatRing(enemy, true));
-    if (this.phase !== 'defeat') this.phase = 'combat';
+    if (this.phase !== 'defeat') this.phase = this.hasLivingEnemies() ? 'combat' : 'victory';
     this.destinationLocation = this.destinationLocation === location ? null : this.destinationLocation;
 
     this.mapLocationButtons.forEach((button, id) => {
@@ -1295,6 +1966,15 @@ export class RealtimeGame {
   }
 
   private handleFire(): void {
+    if (this.selectedBuilding) {
+      const cell = this.pickCellAtReticle();
+      if (!cell) {
+        this.setNotice('Apunta al suelo para elegir dónde construir.');
+        return;
+      }
+      this.placeSelectedBuilding(cell);
+      return;
+    }
     if (this.phase !== 'combat') return;
     const enemy = this.pickEnemyAtReticle();
 
@@ -1377,6 +2057,31 @@ export class RealtimeGame {
     if (this.bowCooldown > 0 || (enemy !== null && enemy.hp <= 0)) return;
     this.bowCooldown = 0.34;
     this.setNotice(enemy ? `Flecha en camino a ${enemy.name}.` : 'Flecha disparada; apunta a un enemigo para acertar.');
+    const restZ = this.playerBowString.position.z;
+    const restPosition = this.playerBowVisual.position.clone();
+    const restRotation = this.playerBowVisual.rotation.z;
+    let released = false;
+    this.playerBowArrow.visible = true;
+    this.addEffect(new THREE.Object3D(), 300, (progress) => {
+      const draw = progress < 0.62 ? progress / 0.62 : Math.max(0, (1 - progress) / 0.38);
+      this.playerBowString.position.z = restZ - draw * 0.24;
+      this.playerBowVisual.position.x = restPosition.x - draw * 0.035;
+      this.playerBowVisual.rotation.z = restRotation + draw * 0.035;
+      if (progress >= 0.62 && !released) {
+        released = true;
+        this.playerBowArrow.visible = false;
+        this.launchPlayerArrow(enemy);
+      }
+    }, () => {
+      this.playerBowString.position.z = restZ;
+      this.playerBowVisual.position.copy(restPosition);
+      this.playerBowVisual.rotation.z = restRotation;
+      this.playerBowArrow.visible = false;
+    });
+  }
+
+  private launchPlayerArrow(enemy: EnemyState | null): void {
+    if (enemy && enemy.hp <= 0) enemy = null;
     const direction = this.camera.getWorldDirection(new THREE.Vector3());
     const start = this.camera.position.clone().add(direction.clone().multiplyScalar(0.75));
     const end = enemy
@@ -1444,9 +2149,35 @@ export class RealtimeGame {
   private tryMovePlayerAxis(x: number, z: number): void {
     const cell = this.worldToCell(x, z);
     if (!this.grid.isWalkable(cell.x, cell.y)) return;
+    if (this.isCellBlockedByBuilding(cell)) return;
+    if (this.isBlockedByWorldObject(x, z)) return;
     if (this.enemies.some((enemy) => enemy.hp > 0 && Math.hypot(enemy.group.position.x - x, enemy.group.position.z - z) < 0.8)) return;
     this.camera.position.x = x;
     this.camera.position.z = z;
+  }
+
+  private isBlockedByWorldObject(x: number, z: number): boolean {
+    const playerRadius = 0.38;
+    for (const tree of this.forestProps) {
+      if (tree.userData.harvested) continue;
+      const radius = tree.userData.woodTreeId ? 0.62 : 0.42;
+      if (Math.hypot(x - tree.position.x, z - tree.position.z) < playerRadius + radius) return true;
+    }
+    for (const rock of this.coastalObstacleProps) {
+      if (Math.hypot(x - rock.position.x, z - rock.position.z) < playerRadius + 0.72) return true;
+    }
+    for (let index = 0; index < this.landmarkProps.length; index++) {
+      const landmark = this.landmarkProps[index];
+      const radius = this.landmarkCollisionRadii[index] ?? 0;
+      if (radius > 0 && Math.hypot(x - landmark.position.x, z - landmark.position.z) < playerRadius + radius) return true;
+    }
+    for (const building of this.builtStructures) {
+      if (building.kind !== 'wall' && building.kind !== 'house') continue;
+      const radius = building.kind === 'house' ? 0.94 : 0.62;
+      const position = building.group.position;
+      if (Math.abs(x - position.x) < radius + playerRadius && Math.abs(z - position.z) < radius + playerRadius) return true;
+    }
+    return false;
   }
 
   private updatePlayerCell(): void {
@@ -1456,6 +2187,7 @@ export class RealtimeGame {
       this.playerCell.y = cell.y;
       const location = this.locationAtCell(cell);
       if (location !== this.currentLocation) this.enterLocation(location);
+      this.checkHealingTile(cell);
     }
   }
 
@@ -1492,6 +2224,7 @@ export class RealtimeGame {
       enemy.group.rotation.y = Math.atan2(dx, dz);
 
       if (this.phase !== 'combat') return;
+      if (distance > 50) return;
 
       const canSeePlayer = distance <= 35 && hasLineOfSight(this.grid, enemy.cell, playerCell, 16);
       if (canSeePlayer) {
@@ -1578,7 +2311,7 @@ export class RealtimeGame {
       const playerDirection = { x: playerCell.x - treeX, y: playerCell.y - treeY };
       for (const [offsetX, offsetY] of [[1, 0], [-1, 0], [0, 1], [0, -1]]) {
         const candidate = { x: treeX + offsetX, y: treeY + offsetY };
-        if (!this.grid.isWalkable(candidate.x, candidate.y) || this.isOccupied(candidate, enemy)) continue;
+        if (!this.grid.isWalkable(candidate.x, candidate.y) || this.isCellBlockedByBuilding(candidate) || this.isOccupied(candidate, enemy)) continue;
 
         const coverDirection = { x: candidate.x - treeX, y: candidate.y - treeY };
         const oppositeSide = playerDirection.x * coverDirection.x + playerDirection.y * coverDirection.y < 0;
@@ -1622,7 +2355,7 @@ export class RealtimeGame {
         const candidate = { x, y };
         const distance = manhattanDistance(center, candidate);
         if (distance < minDistance || distance > maxDistance) continue;
-        if (!this.grid.isWalkable(x, y) || this.isOccupied(candidate, enemy)) continue;
+        if (!this.grid.isWalkable(x, y) || this.isCellBlockedByBuilding(candidate) || this.isOccupied(candidate, enemy)) continue;
         candidates.push(candidate);
       }
     }
@@ -1679,6 +2412,36 @@ export class RealtimeGame {
       return;
     }
     enemy.attackCooldown = 3.2;
+    if (!enemy.bow || !enemy.bowString || !enemy.bowArrow) return;
+    const bow = enemy.bow;
+    const bowString = enemy.bowString;
+    const bowArrow = enemy.bowArrow;
+    const restStringZ = bowString.position.z;
+    const restBowRotation = bow.rotation.y;
+    let released = false;
+    bowArrow.visible = true;
+    this.addEffect(new THREE.Object3D(), 680, (progress) => {
+      const draw = progress < 0.66 ? progress / 0.66 : Math.max(0, (1 - progress) / 0.34);
+      bowString.position.z = restStringZ - draw * 0.28;
+      bow.rotation.y = restBowRotation + draw * 0.08;
+      enemy.group.rotation.x = -draw * 0.035;
+      if (progress >= 0.66 && !released) {
+        released = true;
+        bowArrow.visible = false;
+        this.launchEnemyArrow(enemy);
+      }
+    }, () => {
+      bowString.position.z = restStringZ;
+      bow.rotation.y = restBowRotation;
+      enemy.group.rotation.x = 0;
+      bowArrow.visible = false;
+      if (!released && enemy.hp > 0 && this.phase === 'combat') this.launchEnemyArrow(enemy);
+    }, enemy);
+    this.setNotice(`${enemy.name} tensa el arco.`);
+  }
+
+  private launchEnemyArrow(enemy: EnemyState): void {
+    if (enemy.hp <= 0 || this.phase !== 'combat' || !this.hasLivingEnemies()) return;
     const start = enemy.group.position.clone().add(new THREE.Vector3(0, 1.55, 0));
     const end = this.camera.position.clone().add(new THREE.Vector3(0, -0.15, 0));
     const direction = end.clone().sub(start);
@@ -1698,7 +2461,7 @@ export class RealtimeGame {
       this.damagePlayer(9);
       this.updateHud();
     }, enemy);
-    this.setNotice(`${enemy.name} dispara una flecha.`);
+    this.setNotice(`${enemy.name} suelta una flecha.`);
   }
 
   private damagePlayer(amount: number): void {
@@ -1726,7 +2489,7 @@ export class RealtimeGame {
 
     for (let index = 0; index < distance; index++) {
       const next = { x: destination.x + direction.x, y: destination.y + direction.y };
-      if (!this.grid.isWalkable(next.x, next.y) || this.isOccupied(next, enemy)) break;
+      if (!this.grid.isWalkable(next.x, next.y) || this.isCellBlockedByBuilding(next) || this.isOccupied(next, enemy)) break;
       destination = next;
     }
 
@@ -1943,12 +2706,18 @@ export class RealtimeGame {
 
   private updateHud(): void {
     this.healthLabel.textContent = `PV ${this.playerHp} / ${this.playerMaxHp}`;
-    const livingEnemies = this.enemies.filter((enemy) => enemy.hp > 0).length;
+    this.woodLabel.textContent = String(this.woodCount);
+    this.buildWoodValue.textContent = String(this.woodCount);
+    this.buildButtons.forEach((button, kind) => {
+      button.disabled = this.woodCount < BUILDING_COST[kind];
+      button.setAttribute('aria-pressed', String(this.selectedBuilding === kind));
+    });
+    const livingEnemies = this.enemies.filter((enemy) => enemy.hp > 0 && enemy.location === this.currentLocation).length;
     this.enemyCountLabel.textContent = `ENEMIGOS ${livingEnemies}`;
     this.turnIndicator.textContent = this.phase === 'combat'
       ? 'COMBATE ACTIVO'
       : this.phase === 'victory'
-        ? 'BOSQUE DESPEJADO'
+        ? 'MUNDO DESPEJADO'
         : 'DERROTA';
     this.shieldLabel.textContent = this.isShielding ? 'ESCUDO ACTIVO · Q' : 'ESCUDO · MANTENER Q';
     this.shieldLabel.classList.toggle('shield-active', this.isShielding);
@@ -2076,6 +2845,9 @@ export class RealtimeGame {
 
   private createPathGrid(blockedCells: Cell[]): Grid {
     const obstacles = [...OBSTACLES];
+    this.builtStructures.forEach((building) => {
+      if (building.kind === 'wall' || building.kind === 'house') obstacles.push([building.cell.x, building.cell.y]);
+    });
     blockedCells.forEach((cell) => obstacles.push([cell.x, cell.y]));
     return new Grid(GRID_WIDTH, GRID_HEIGHT, obstacles);
   }
@@ -2181,6 +2953,7 @@ export class RealtimeGame {
 
     this.updatePlayerMovement(delta);
     this.updateWaypoint();
+    this.updateBuildingPreview();
     this.updateNetwork(delta);
     this.updateEnemies(delta);
     this.updateEffects(delta * 1000);
@@ -2197,6 +2970,9 @@ export class RealtimeGame {
   private updateCooldowns(delta: number): void {
     this.bowCooldown = Math.max(0, this.bowCooldown - delta);
     this.playerSpeedBoost = Math.max(0, this.playerSpeedBoost - delta);
+    this.healingTiles.forEach((tile) => {
+      tile.glowMaterial.opacity = 0.62 + Math.sin(performance.now() * 0.004) * 0.14;
+    });
     Object.values(this.skillStates).forEach((state) => {
       state.cooldown = Math.max(0, state.cooldown - delta);
     });
